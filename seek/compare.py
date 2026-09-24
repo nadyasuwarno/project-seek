@@ -169,7 +169,7 @@ def compare(query: dict, target: dict, scale_free: bool = True) -> Comparison:
             comps,
         )
         if dim.score is None:
-            dim.status, dim.note = "unmeasured", "Not measured in both signatures."
+            dim.status, dim.note = "unmeasured", "Not measured in one or both signatures."
         elif family == "temporal" and _both_below(fa, fb, "periodicity_strength", RHYTHM_PRESENT):
             dim.status = "shared_absence"
             dim.note = "Neither shows a rhythm. Agreeing on an absence is not evidence of similarity, so it is not scored."
