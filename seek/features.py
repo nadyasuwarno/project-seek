@@ -53,7 +53,7 @@ class _Track:
     spec_count: int
 
 
-def _per_track(tr: pd.DataFrame, dt: float) -> _Track | None:
+def _per_track(tr: pd.DataFrame, dt: float, spectrum_before_frame: int | None = None) -> _Track | None:
     frames = tr["frame"].to_numpy(int)
     xy = tr[["x_um", "y_um"]].to_numpy(float)
     if len(frames) < MIN_TRACK_POINTS:
@@ -105,12 +105,16 @@ def _per_track(tr: pd.DataFrame, dt: float) -> _Track | None:
             msd_sum[lag - 1] = float((arr ** 2).sum())
             msd_count[lag - 1] = len(arr)
 
-    # power spectrum of speed fluctuations, from runs of consecutive steps
+    # Power spectrum of speed fluctuations, from runs of consecutive steps.
+    # Rhythm is measured on unperturbed behavior only: a one-off speed pulse
+    # after a perturbation would otherwise masquerade as a periodic signal.
     n_bins = SPECTRUM_SEGMENT // 2 + 1
     spec_sum = np.zeros(n_bins)
     spec_count = 0
     window = np.hanning(SPECTRUM_SEGMENT)
-    runs = np.split(speeds, np.where(np.diff(step_frames) != 1)[0] + 1) if len(speeds) else []
+    keep = step_frames < spectrum_before_frame if spectrum_before_frame is not None else np.ones(len(speeds), bool)
+    s_speeds, s_frames = speeds[keep], step_frames[keep]
+    runs = np.split(s_speeds, np.where(np.diff(s_frames) != 1)[0] + 1) if len(s_speeds) else []
     for run in runs:
         for start in range(0, len(run) - SPECTRUM_SEGMENT + 1, SPECTRUM_SEGMENT):
             seg = run[start:start + SPECTRUM_SEGMENT]
@@ -251,7 +255,8 @@ def compute_signature(tracks_df: pd.DataFrame, frame_interval_s: float, field_w_
         return SignatureResult({k: None for k in keys}, {k: None for k in keys}, quality)
 
     n_frames = n_frames or int(tracks_df["frame"].max()) + 2
-    tracks = [t for _, g in tracks_df.groupby("particle") if (t := _per_track(g, dt)) is not None]
+    p_frame = int(round(perturbation_time_s / dt)) if perturbation_time_s is not None else None
+    tracks = [t for _, g in tracks_df.groupby("particle") if (t := _per_track(g, dt, p_frame)) is not None]
     lengths = tracks_df.groupby("particle").size()
     quality.update(
         n_tracks=len(tracks),
