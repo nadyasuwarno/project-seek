@@ -1,0 +1,8 @@
+# Tested with Python 3.11
+streamlit>=1.40
+opencv-python-headless>=4.10
+trackpy>=0.6
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+pytest>=8.0
