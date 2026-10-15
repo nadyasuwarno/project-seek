@@ -43,13 +43,44 @@ No clip handy? Pick **Synthetic demo** in the app (aligned / random / biased dot
 Headings: 0° = right, 90° = up. Exports: `tracks.csv` (per cell per frame), `summary.json`
 (Tier 0 + six summary numbers + settings + file hash), annotated MP4 (H.264).
 
+## Prototype 2 · Repository (step 1: local)
+
+When an analysis finishes, Seek asks **"Save this recording to the repository?"** (with an optional title and
+note). **Save** keeps the video and its analysis as one record; **Not now** keeps nothing (a *Save to
+repository…* button stays on the results if you change your mind). Saved records live on the **Repository**
+page: open one to replay the video with its analysis layers, read the conditions and the six measures,
+download the files, and keep notes on it.
+
+```bash
+streamlit run app.py               # Analyze → (save?) → Repository tab
+python tools/seed_archive.py       # optional: 6 synthetic records so the Repository isn't empty
+```
+
+| Piece | File | What it does |
+| --- | --- | --- |
+| Storage | `seek/storage.py` | One interface (`put/get/exists/size/delete_prefix`). Today: `data/files/`. Step 3: Oracle Object Storage via `SEEK_STORAGE=oci` |
+| Database | `seek/db.py` | SQLite at `data/seek.sqlite3`: `researchers`, `recordings`, `analyses`, `reviews`, plus `notes` and `audit_log` |
+| Repository | `seek/archive.py` | `submit`, `list_records` (search + filters), `get_record`, `add_note`, `review`; files and rows are saved together or not at all |
+| Specimen | `seek/thumb.py` | Each record's thumbnail: all of its tracks drawn as one ink silhouette |
+| Pages | `app.py` | `main()` = Analyze (with the save pop-up); `archive_page()` = Repository sheet + record view (`?id=SK-2610-001`) |
+
+A record (`SK-yymm-nnn`) stores: the original video, `tracks.parquet` (per cell per frame, incl. pixel
+positions so layers can be redrawn), `summary.json`, `thumb.png`, and the annotated MP4 if rendered.
+Every record is tied to a researcher (`R-0001`) and starts with status **submitted** (for the review flow in
+step 2). Visibility: researchers see their own records and everyone's approved ones; admins see everything.
+
+Until login lands (step 2) everything is saved under the local owner, set with `SEEK_OWNER_NAME` /
+`SEEK_OWNER_EMAIL`. `SEEK_DATA_DIR` moves the whole repository. `data/` is git-ignored.
+
 ### Repo layout
 
 ```
-app.py                 Streamlit page
-seek/                  io · detect · track · metrics · pipeline · overlay
+app.py                 Streamlit app: Analyze page (main) + Repository page (archive_page)
+seek/                  io · detect · track · metrics · pipeline · overlay · storage · db · archive · thumb
 tools/make_test_video.py   synthetic clip with known answers (also a CLI)
+tools/seed_archive.py      fill the repository with synthetic records
 tests/test_metrics.py      accuracy checks
+tests/test_archive.py      archive round-trip, visibility, failed-save cleanup
 .streamlit/config.toml     dark theme
 ```
 
