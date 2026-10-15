@@ -1,0 +1,12 @@
+streamlit>=1.50       # top navigation, keyed containers, page links with query params
+opencv-python-headless>=4.9
+trackpy>=0.6
+numba            # optional, makes trackpy's refine step much faster
+numpy
+pandas
+scipy
+plotly
+tifffile
+imageio-ffmpeg   # bundled ffmpeg → browser-playable annotated MP4
+pyarrow          # tracks.parquet in the archive
+pytest
