@@ -13,6 +13,7 @@ import io as _io
 import json
 import os
 import re
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -21,6 +22,8 @@ import pandas as pd
 from . import db, storage as storage_mod, thumb
 
 # columns kept in tracks.parquet: the export columns + what the record viewer needs to redraw layers
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 TRACK_COLS = ["frame", "time_s", "cell_id", "x", "y", "x_um", "y_um", "vx_um_s", "vy_um_s",
               "speed_um_s", "heading_deg", "nn_dist_um", "alignment", "signal_drift_um_s", "neighbors_in_R"]
 REVIEW_DECISIONS = ("in_review", "approved", "needs_changes", "rejected")
@@ -28,16 +31,26 @@ REVIEW_DECISIONS = ("in_review", "approved", "needs_changes", "rejected")
 
 class Archive:
     def __init__(self, data_dir: str | os.PathLike | None = None, files: storage_mod.Storage | None = None):
-        self.dir = Path(data_dir or os.environ.get("SEEK_DATA_DIR", "data"))
+        # absolute, anchored to the project folder: works no matter where `streamlit run` was started from
+        self.dir = Path(data_dir or os.environ.get("SEEK_DATA_DIR") or PROJECT_ROOT / "data").expanduser()
+        if not self.dir.is_absolute():
+            self.dir = PROJECT_ROOT / self.dir
+        self.dir = self.dir.resolve()
         self.dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.dir / "seek.sqlite3"
         self.files = files or storage_mod.from_env(self.dir)
-        with self._db() as con:
-            con.executescript(db.SCHEMA)
+        with self._db():
+            pass                                            # creates the database + tables on first run
 
     @contextmanager
     def _db(self):
-        con = db.connect(self.db_path)
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)     # recreated if the data folder was moved or deleted
+            con = db.connect(self.db_path)
+            con.executescript(db.SCHEMA)                    # no-op when the tables exist
+        except sqlite3.OperationalError as e:
+            raise RuntimeError(f"Can't open the repository database at {self.db_path} ({e}). Check that this "
+                               f"folder exists and is writable, or set SEEK_DATA_DIR to another folder.") from e
         try:
             yield con
             con.commit()
