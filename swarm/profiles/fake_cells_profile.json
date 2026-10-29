@@ -1,0 +1,48 @@
+{
+  "_about": "Behavior profile fitted by seek_bridge.py. Distances in BODY LENGTHS, speeds in BODY LENGTHS PER SECOND. 'targets' = what the cells' group looked like.",
+  "source": "tracks file fake_couzin_tracks.csv",
+  "model": "couzin_zones",
+  "zone_repulsion_bl": 1.3,
+  "zone_orientation_bl": 8.25,
+  "zone_attraction_bl": 15.2,
+  "blind_angle_deg": 60,
+  "speed_bl_per_s": 1.2,
+  "max_turn_rate_deg_per_s": 61.0,
+  "heading_noise_deg": 5.0,
+  "targets": {
+    "polarization": 0.279,
+    "milling": 0.453,
+    "nnd_bl": 1.993,
+    "cells_per_frame": 40.0
+  },
+  "fit": {
+    "organism": null,
+    "cell_length_um": 2.5,
+    "cell_length_from": "--cell-um",
+    "cell_speed_bl_per_s": 12.0,
+    "time_scale": 0.1,
+    "time_scale_meaning": "1 s of robot motion \u2248 0.100 s of cell motion",
+    "repulsion_measured_bl": 1.25,
+    "repulsion_note": "where cell pairs stop being rarer than chance (pair-distance distribution) (raised to robot minimum)",
+    "orientation_note": "distance where heading similarity falls halfway to background",
+    "alignment_near_vs_far": [
+      0.335,
+      -0.076
+    ],
+    "attraction_note": "ASSUMED (not measurable from one video) \u2014 tune live against targets",
+    "turning_note": "turn rate and noise measured per body length travelled, replayed at robot speed",
+    "frames_used": 600,
+    "tracks_used": 40
+  },
+  "experiment": {
+    "num_robots": 12,
+    "duration_s": 80,
+    "seed": 7,
+    "override": {
+      "enabled": false,
+      "start_s": 30,
+      "end_s": 55,
+      "target_m": "farthest_corner"
+    }
+  }
+}

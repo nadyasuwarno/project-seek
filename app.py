@@ -8,6 +8,7 @@ import base64
 import html
 import json
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
@@ -710,6 +711,9 @@ def record_page(arc, me, code):
         speed_chart(arc, rec)
 
     st.markdown("<hr style='margin:1.2rem 0'>", unsafe_allow_html=True)
+    record_swarm(arc, rec, me)
+
+    st.markdown("<hr style='margin:1.2rem 0'>", unsafe_allow_html=True)
     files_col, notes_col = st.columns([2, 3], gap="large")
     with files_col:
         record_files(arc, rec, me, s)
@@ -774,6 +778,89 @@ def speed_chart(arc, rec):
                       yaxis=dict(showgrid=False, rangemode="tozero", color=INK))
     st.markdown("<div class='lbl' style='margin-top:14px'>Mean speed over time · µm/s</div>", unsafe_allow_html=True)
     st.plotly_chart(fig, config={"displayModeBar": False}, key="rec-speed")
+
+
+# ── Embody (prototype 3): send this record to the robot swarm ─────────────────────────
+def record_swarm(arc, rec, me):
+    """Fit swarm rules from this record (swarm.bridge), show them, and open the live simulator."""
+    from swarm import bridge                       # numpy/scipy only; the simulator is imported by the tuner
+    code = rec["record_code"]
+    st.markdown("<div class='lbl'>Embody · send to swarm</div>", unsafe_allow_html=True)
+
+    def send():
+        try:
+            with st.spinner("Measuring the cells' rules…"):
+                arc.attach_swarm_profile(code, me["id"], bridge.profile_for_record(arc, rec))
+        except ValueError as e:
+            ss.swarm_error = str(e)
+
+    prof = arc.swarm_profile(code)
+    if ss.get("swarm_error"):
+        st.error(ss.pop("swarm_error"))
+    if prof is None:
+        c1, c2 = st.columns([1, 3], vertical_alignment="center")
+        c1.button("Send to swarm", on_click=send, width="stretch")
+        c2.caption("Turns this record's cell behaviour into rules a robot swarm can run, measured in body "
+                   "lengths, plus the cells' group alignment, rotation and spacing as targets for the robots.")
+        return
+
+    f, t = prof["fit"], prof["targets"]
+    rules, targets, actions = st.columns([1.15, 1, 1], gap="large")
+    with rules:
+        st.markdown("<div class='lbl'>Rules for the robots · body lengths</div>", unsafe_allow_html=True)
+        st.markdown(kv([
+            ("repulsion", f"{prof['zone_repulsion_bl']:g} BL"),
+            ("orientation", f"{prof['zone_orientation_bl']:g} BL"),
+            ("attraction (assumed)", f"{prof['zone_attraction_bl']:g} BL"),
+            ("speed", f"{prof['speed_bl_per_s']:g} BL/s"),
+            ("max turn", f"{prof['max_turn_rate_deg_per_s']:g} °/s"),
+            ("heading noise", f"{prof['heading_noise_deg']:g} °"),
+        ]), unsafe_allow_html=True)
+    with targets:
+        st.markdown("<div class='lbl'>Cell targets · what the group did</div>", unsafe_allow_html=True)
+        st.markdown(kv([
+            ("alignment", fmt(t.get("polarization"), "{:.2f}")),
+            ("rotation", fmt(t.get("milling"), "{:.2f}")),
+            ("spacing", fmt(t.get("nnd_bl"), "{:.2f} BL")),
+            ("cells per frame", fmt(t.get("cells_per_frame"), "{:g}")),
+            ("body length", f"{f['cell_length_um']:g} µm"),
+            ("time scale", f"1 s robot ≈ {f['time_scale']:g} s cells"),
+        ]), unsafe_allow_html=True)
+    with actions:
+        st.markdown("<div class='lbl'>Run it</div>", unsafe_allow_html=True)
+        if st.button("Open live swarm", width="stretch", type="primary"):
+            open_live_swarm(arc, code)
+        st.download_button("swarm_profile.json", json.dumps(prof, indent=2), f"{code}_swarm_profile.json",
+                           "application/json", width="stretch")
+        st.button("Re-fit from this record", on_click=send, width="stretch")
+        tuned = arc.dir / "swarm" / f"{code}_tuned.json"
+        if tuned.exists():
+            st.download_button("Your tuned rules (from the live swarm)", tuned.read_bytes(),
+                               f"{code}_tuned.json", "application/json", width="stretch")
+    with st.expander("How each rule was measured"):
+        st.markdown(kv([
+            ("body length", f["cell_length_from"]),
+            ("repulsion", f["repulsion_note"]),
+            ("orientation", f["orientation_note"]),
+            ("attraction", f["attraction_note"]),
+            ("turning + noise", f["turning_note"]),
+            ("data used", f"{f['tracks_used']} tracks · {f['frames_used']} frames"),
+        ]), unsafe_allow_html=True)
+
+
+def open_live_swarm(arc, code):
+    """The live swarm runs in its own window on this computer (Seek must be running locally)."""
+    import importlib.util
+    import subprocess
+    import sys
+    if importlib.util.find_spec("rps") is None:
+        st.warning("The robot simulator isn't installed in this Python environment. In a terminal inside "
+                   "project-seek, run:  pip install -r requirements-swarm.txt  — then press the button again.")
+        return
+    path = arc.swarm_profile_file(code)
+    subprocess.Popen([sys.executable, "-m", "swarm.live_tuner", "--profile", str(path)],
+                     cwd=str(Path(__file__).resolve().parent))
+    st.toast(f"Opening the live swarm for {code} in its own window…")
 
 
 def record_files(arc, rec, me, s):

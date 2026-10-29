@@ -1,0 +1,5 @@
+# Extra packages for the swarm (prototype 3). Install on top of requirements.txt:
+#   pip install -r requirements-swarm.txt
+matplotlib
+cvxopt
+robotarium_python_simulator @ git+https://github.com/robotarium/robotarium_python_simulator.git

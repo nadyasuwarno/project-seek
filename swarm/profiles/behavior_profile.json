@@ -1,0 +1,24 @@
+{
+  "_about": "Behavior profile: the bridge between Seek and the robots. Distances are in BODY LENGTHS, speeds in BODY LENGTHS PER SECOND, so the same profile can describe a microbe or a robot. Later, Seek will fit these numbers from real trajectories; for now they are hand-picked Couzin-model values.",
+  "source": "hand-tuned placeholder (not yet fitted from Seek data)",
+  "model": "couzin_zones",
+  "zone_repulsion_bl": 2.0,
+  "zone_orientation_bl": 5.0,
+  "zone_attraction_bl": 10.0,
+  "blind_angle_deg": 60,
+  "speed_bl_per_s": 1.2,
+  "max_turn_rate_deg_per_s": 120,
+  "heading_noise_deg": 10,
+  "experiment": {
+    "num_robots": 12,
+    "duration_s": 80,
+    "seed": 7,
+    "override": {
+      "enabled": true,
+      "start_s": 30,
+      "end_s": 55,
+      "target_m": "farthest_corner",
+      "_about": "Intervene phase: a human command overrides the swarm rules. We measure how long it takes the group to reach the target, then release control and watch whether the swarm re-forms on its own."
+    }
+  }
+}
