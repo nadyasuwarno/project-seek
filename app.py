@@ -857,9 +857,11 @@ def open_live_swarm(arc, code):
         st.warning("The robot simulator isn't installed in this Python environment. In a terminal inside "
                    "project-seek, run:  pip install -r requirements-swarm.txt  — then press the button again.")
         return
+    import os
     path = arc.swarm_profile_file(code)
+    env = {k: v for k, v in os.environ.items() if k != "MPLBACKEND"}   # Streamlit sets Agg (off-screen) for itself
     subprocess.Popen([sys.executable, "-m", "swarm.live_tuner", "--profile", str(path)],
-                     cwd=str(Path(__file__).resolve().parent))
+                     cwd=str(Path(__file__).resolve().parent), env=env)
     st.toast(f"Opening the live swarm for {code} in its own window…")
 
 

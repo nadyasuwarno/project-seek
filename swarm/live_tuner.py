@@ -19,10 +19,12 @@ the cells' collective behaviour with robots.
 """
 import argparse
 import json
+import sys
 import time
 from collections import deque
 from pathlib import Path
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import rps.robotarium as robotarium
@@ -260,7 +262,24 @@ class Tuner:
         plt.show()
 
 
+def use_window_backend():
+    """The tuner needs an on-screen window. If something (e.g. Streamlit) left matplotlib drawing
+    off-screen ('Agg'), switch to this computer's window backend before any figure is made."""
+    if matplotlib.get_backend().lower() not in ("agg", "pdf", "svg", "ps", "cairo", "template"):
+        return
+    for name in (["macosx"] if sys.platform == "darwin" else []) + ["QtAgg", "TkAgg"]:
+        try:
+            plt.switch_backend(name)
+            return
+        except Exception:
+            continue
+    raise SystemExit("No on-screen window is available for matplotlib on this computer. "
+                     "On a Mac this should not happen — run it from a normal Terminal session.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default=str(Path(__file__).parent / "profiles" / "behavior_profile.json"))
-    Tuner(ap.parse_args().profile).run()
+    a = ap.parse_args()
+    use_window_backend()
+    Tuner(a.profile).run()
