@@ -843,9 +843,55 @@ def record_swarm(arc, rec, me):
             ("repulsion", f["repulsion_note"]),
             ("orientation", f["orientation_note"]),
             ("attraction", f["attraction_note"]),
-            ("turning + noise", f["turning_note"]),
+            ("turning + wander", f["turning_note"]),
             ("data used", f"{f['tracks_used']} tracks · {f['frames_used']} frames"),
         ]), unsafe_allow_html=True)
+    record_fidelity(arc, rec, me, prof)
+
+
+def record_fidelity(arc, rec, me, prof):
+    """Is this record accurately depicted in the swarm? Cells vs robots, measured the same way."""
+    from swarm import compare
+    code = rec["record_code"]
+    st.markdown("<div class='lbl' style='margin-top:14px'>Fidelity check · cells vs robots</div>",
+                unsafe_allow_html=True)
+
+    def run_check():
+        bar = st.progress(0.0, text="Running the robots with this record's rules…")
+        result, png = compare.check(arc.tracks(rec), prof, code,
+                                    progress=lambda k, n: bar.progress(k / n, text=f"Robot run {k + 1} of {n}…"))
+        arc.attach_swarm_check(code, me["id"], result, png)
+        bar.empty()
+
+    saved = arc.swarm_check(code)
+    c1, c2 = st.columns([1, 3], vertical_alignment="center")
+    if c1.button("Check fidelity" if saved is None else "Re-run check", width="stretch"):
+        run_check()
+        saved = arc.swarm_check(code)
+    c2.caption("Runs the robots 4 times with these rules, measures them exactly like Seek measures the cells, "
+               "and asks: does each cell value fall inside the range the robots produce? About a minute.")
+    if saved is None:
+        return
+    result, png = saved
+    if result.get("rules") != {k: prof.get(k) for k in compare.RULE_KEYS}:
+        st.caption("The rules changed after this check (re-fitted) — re-run it to test the current rules.")
+    st.markdown(f"<div style='font-size:1.05rem;margin:6px 0'><b>{esc(result['summary'])}</b> · "
+                f"{result['robots']} robots × {result['runs']} runs · {esc(result['engine'])}</div>",
+                unsafe_allow_html=True)
+    rows = []
+    for m in result["metrics"].values():
+        if m.get("robots_range"):
+            lo, hi = m["robots_range"]
+            detail = f"cells {m['cells']} · robots {lo}–{hi} {m['unit']}"
+        else:
+            share = m.get("inside_share")
+            detail = "cells' curve inside robots' band " + ("—" if share is None else f"{share:.0%}")
+        rows.append((f"{m['label']} · {m['verdict']}", detail))
+    st.markdown(kv(rows), unsafe_allow_html=True)
+    st.image(png, width="stretch")
+    with st.expander("How to read this"):
+        for note in result.get("notes", []):
+            st.caption(note)
 
 
 def open_live_swarm(arc, code):

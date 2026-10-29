@@ -34,8 +34,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.widgets import Button, Slider
 from rps.utilities.barrier_certificates import create_uni_barrier_certificate_with_boundary
 
-from swarm.sim import (ARENA, BODY_LENGTH_M, DT, couzin_heading, initial_poses, metrics,
-                       steer, unit, wall_push)
+from swarm.sim import ARENA, BODY_LENGTH_M, DT, decide, initial_poses, metrics
 
 INK, MUTED, SWARM, OVR, CELL = "#2C2C2A", "#888780", "#1D9E75", "#D85A30", "#534AB7"
 HISTORY_S = 30
@@ -46,10 +45,10 @@ SLIDERS = [  # key, label, min, max, step
     ("zone_orientation_bl", "Orientation (BL)", 0, 15, 0.25),
     ("zone_attraction_bl", "Attraction (BL)", 0, 25, 0.5),
     ("speed_bl_per_s", "Speed (BL/s)", 0.2, 1.5, 0.05),
-    ("heading_noise_deg", "Noise (°)", 0, 60, 1),
+    ("heading_noise_deg", "Wander (°/tick)", 0, 20, 0.5),
     ("max_turn_rate_deg_per_s", "Max turn (°/s)", 20, 200, 5),
     ("blind_angle_deg", "Blind angle (°)", 0, 180, 5),
-    ("num_robots", "Robots (on Reset)", 3, 30, 1),
+    ("num_robots", "Robots (on Reset)", 3, 22, 1),
 ]
 
 
@@ -71,6 +70,7 @@ class Tuner:
                                        initial_conditions=initial_poses(self.n, self.rng),
                                        skip_initialization=True)
         self.t = 0.0
+        self.wander = {}
         self.hist = {k: deque(maxlen=int(HISTORY_S / DT)) for k in ("t", "pol", "mill", "nnd")}
         self.trail = deque(maxlen=TRAIL)
         self.target = None
@@ -96,12 +96,7 @@ class Tuner:
         p = self.prof()
         x = self.r.get_poses()
         pos, head = x[:2], x[2]
-        dxu = np.zeros((2, self.n))
-        for i in range(self.n):
-            desired = unit(self.target - pos[:, i]) if self.target is not None else couzin_heading(i, pos, head, p)
-            desired = unit(desired + 1.5 * wall_push(pos[:, i]))
-            a = np.arctan2(desired[1], desired[0]) + self.rng.normal(0, p["noise"])
-            dxu[:, i] = steer(head[i], np.array([np.cos(a), np.sin(a)]), p["speed"], p["max_turn"])
+        dxu = decide(pos, head, p, self.rng, target=self.target, state=self.wander)
         self.r.set_velocities(np.arange(self.n), self.safety(dxu, x))
         self.r.step()
         self.t += DT

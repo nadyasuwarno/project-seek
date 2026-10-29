@@ -199,7 +199,7 @@ def fit(df, cell_um, meta):
         "blind_angle_deg": 60,
         "speed_bl_per_s": round(robot_speed, 3),
         "max_turn_rate_deg_per_s": round(float(np.clip(max_turn, 20, MAX_TURN_CAP_DEG_S)), 1),
-        "heading_noise_deg": round(float(np.clip(noise_tick, 0, 60)), 1),
+        "heading_noise_deg": round(float(np.clip(noise_tick, 0, 20)), 1),
         "targets": targets,
         "fit": {
             "organism": meta.get("organism"),
@@ -214,7 +214,7 @@ def fit(df, cell_um, meta):
             "alignment_near_vs_far": [None if np.isnan(c_near) else round(c_near, 3),
                                       None if np.isnan(c_far) else round(c_far, 3)],
             "attraction_note": "ASSUMED (not measurable from one video) — tune live against targets",
-            "turning_note": "turn rate and noise measured per body length travelled, replayed at robot speed",
+            "turning_note": "turn rate and random heading wander measured per body length travelled, replayed at robot speed",
             "frames_used": int(d["frame"].nunique()), "tracks_used": int(d["cell_id"].nunique()),
         },
     }

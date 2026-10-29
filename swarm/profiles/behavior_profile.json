@@ -1,5 +1,5 @@
 {
-  "_about": "Behavior profile: the bridge between Seek and the robots. Distances are in BODY LENGTHS, speeds in BODY LENGTHS PER SECOND, so the same profile can describe a microbe or a robot. Later, Seek will fit these numbers from real trajectories; for now they are hand-picked Couzin-model values.",
+  "_about": "Behavior profile: the bridge between Seek and the robots. Distances are in BODY LENGTHS, speeds in BODY LENGTHS PER SECOND, so the same profile can describe a microbe or a robot. Later, Seek will fit these numbers from real trajectories; for now they are hand-picked Couzin-model values. heading_noise_deg = random heading wander per 0.033 s tick.",
   "source": "hand-tuned placeholder (not yet fitted from Seek data)",
   "model": "couzin_zones",
   "zone_repulsion_bl": 2.0,
@@ -8,7 +8,7 @@
   "blind_angle_deg": 60,
   "speed_bl_per_s": 1.2,
   "max_turn_rate_deg_per_s": 120,
-  "heading_noise_deg": 10,
+  "heading_noise_deg": 3.0,
   "experiment": {
     "num_robots": 12,
     "duration_s": 80,

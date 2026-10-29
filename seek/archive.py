@@ -271,6 +271,19 @@ class Archive:
         key = self.swarm_key(code)
         return json.loads(self.files.get(key)) if self.files.exists(key) else None
 
+    def attach_swarm_check(self, code: str, actor_id: int, result: dict, png: bytes) -> None:
+        """Store a fidelity check (swarm.compare): cells vs robots measured the same way."""
+        self.files.put(f"records/{code}/swarm_check.json", json.dumps(result, indent=2, default=str).encode())
+        self.files.put(f"records/{code}/swarm_check.png", png)
+        with self._db() as con:
+            self._audit(con, actor_id, "swarm_check", code, {"summary": result.get("summary")})
+
+    def swarm_check(self, code: str) -> tuple[dict, bytes] | None:
+        j, p = f"records/{code}/swarm_check.json", f"records/{code}/swarm_check.png"
+        if not (self.files.exists(j) and self.files.exists(p)):
+            return None
+        return json.loads(self.files.get(j)), self.files.get(p)
+
     def swarm_profile_file(self, code: str) -> Path:
         """Copy the profile to a plain file the simulator can open: data/swarm/<code>.json.
         The live tuner saves its tuned version next to it (<code>_tuned.json)."""

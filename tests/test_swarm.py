@@ -77,3 +77,19 @@ def test_commands_respect_wheel_limits():
     for err in np.linspace(-np.pi, np.pi, 25):
         v, w = sim.steer(0.0, np.array([np.cos(err), np.sin(err)]), speed=0.18, max_turn=np.deg2rad(200))
         assert v + abs(w) * sim.BODY_LENGTH_M / 2 <= sim.WHEEL_MAX_M_S + 1e-9
+
+
+def test_fidelity_check_trusts_identical_rules():
+    """Sanity of the check itself: 'cells' that are robots running a profile must match robots
+    running the same profile with different chance."""
+    import json
+    from swarm import compare
+    prof = json.load(open(os.path.join(os.path.dirname(__file__), "..", "swarm", "profiles", "behavior_profile.json")))
+    prof["fit"], prof["targets"] = {"cell_length_um": 2.5, "time_scale": 0.1}, {"cells_per_frame": 10}
+    poses, _ = compare.simulate_robots(prof, 10, 25, seed=101, warmup_s=5)
+    pseudo_cells = compare.robots_as_tracks(poses, 2.5, 0.1, 20)
+    result, png = compare.check(pseudo_cells, prof, "sanity", runs=3)
+    verdicts = {k: m["verdict"] for k, m in result["metrics"].items()}
+    assert verdicts["speed"] == "close" and verdicts["nn"] == "close"
+    assert sum(v == "close" for v in verdicts.values()) >= 4
+    assert png[:4] == b"\x89PNG"

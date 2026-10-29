@@ -18,7 +18,7 @@ import numpy as np
 import rps.robotarium as robotarium
 from rps.utilities.barrier_certificates import create_uni_barrier_certificate_with_boundary
 
-from swarm.sim import DT, couzin_heading, initial_poses, load_profile, metrics, steer, unit, wall_push
+from swarm.sim import DT, decide, initial_poses, load_profile, metrics
 
 
 # --------------------------------------------------------------------------
@@ -44,6 +44,7 @@ def run(profile_path, out_dir, live):
     os.makedirs(out_dir, exist_ok=True)
     traj_rows, metric_rows = [], []
     reached_at = None
+    wander = {}             # smooth random wander, carried tick to tick
     target = None            # chosen when the override starts
     corners = np.array([[-1.2, -0.65], [-1.2, 0.65], [1.2, -0.65], [1.2, 0.65]])
 
@@ -62,17 +63,7 @@ def run(profile_path, out_dir, live):
                 target = np.array(ov["target_m"])
             start_dist = float(np.linalg.norm(pos.mean(axis=1) - target))
 
-        dxu = np.zeros((2, N))
-        for i in range(N):                         # DECIDE
-            if overriding:
-                desired = unit(target - pos[:, i])
-            else:
-                desired = couzin_heading(i, pos, head, prof)
-            desired = unit(desired + 1.5 * wall_push(pos[:, i]))
-            ang = np.arctan2(desired[1], desired[0]) + rng.normal(0, prof["noise"])
-            desired = np.array([np.cos(ang), np.sin(ang)])
-            dxu[:, i] = steer(head[i], desired, prof["speed"], prof["max_turn"])
-
+        dxu = decide(pos, head, prof, rng, target=target if overriding else None, state=wander)   # DECIDE
         dxu = safety(dxu, x)                       # invisible bumper
         r.set_velocities(np.arange(N), dxu)        # ACT
         r.step()
