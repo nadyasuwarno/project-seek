@@ -132,6 +132,10 @@ def style():
         background: #fff !important;}}
     .stButton button[kind="primary"] {{background: {INK}; border: 0; border-radius: 12px; min-height: 46px;}}
     .stButton button[kind="secondary"] {{border-radius: 999px;}}
+    .stButton button[kind="primary"]:disabled {{background: #CFCFCF; color: #fff; opacity: 1;}}
+    .live {{font-size: .95rem; margin-bottom: .5rem; display: flex; gap: .6rem; align-items: baseline;}}
+    .live b {{font-size: 1.6rem; font-weight: 700;}} .live span {{color: {MUTED}; font-size: .8rem;
+        margin-left: auto; margin-right: 2.6rem;}}
     /* steps strip on the landing page */
     .steps {{display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.4rem; margin-top: 3.2rem;
              border-top: 1px solid {EDGE}; padding-top: 1.4rem;}}
@@ -209,7 +213,7 @@ def terminal():
         vid_hash, name, video_bytes, size = "demo-blue", "demo_cells_blue_light.mp4", None, "demo"
 
     if ss.get("vid_hash") != vid_hash:      # new video → fresh state, prefilled from the file
-        ss.update(vid_hash=vid_hash, phase="setup", job=None, saved_code=None, preview=0,
+        ss.update(vid_hash=vid_hash, phase="setup", job=None, saved_code=None, setup_frame=0, result_frame=0,
                   fps_in=float(info["fps"] or 0.0))
         if meta:
             ss.update(organism="Demo cells", uploader="Seek demo", um_in=meta["um_per_px"], temperature=25.0,
@@ -261,14 +265,41 @@ def settings_for(info, minmass):
                     signal_dir=None if ss.light_from == "none" else ss.light_from)
 
 
+def play_step(fps):
+    return max(1, round((fps or 10) * 0.15))       # frames to advance per refresh, so playback runs near real time
+
+
+def video_player(key, n, fps, draw, count_text):
+    """Every video in Seek: live count line on top, the frame, then Play + frame slider.
+    `draw(f)` returns the image for frame f; `count_text(f)` the live line above it."""
+    ss.setdefault(f"{key}_play", True)
+    ss.setdefault(f"{key}_frame", 0)
+    ss[f"_{key}_mode"] = ss[f"{key}_play"]
+
+    @st.fragment(run_every=0.15 if ss[f"{key}_play"] else None)
+    def player():
+        if ss[f"{key}_play"]:
+            ss[f"{key}_frame"] = (ss[f"{key}_frame"] + play_step(fps)) % n
+        f = min(ss[f"{key}_frame"], n - 1)
+        st.markdown(f"<div class='live'>{count_text(f)}</div>", unsafe_allow_html=True)
+        st.image(draw(f), width="stretch", output_format="JPEG")
+        c1, c2 = st.columns([1, 5], vertical_alignment="center")
+        playing = c1.toggle("Play", value=ss[f"{key}_play"], key=f"{key}_play_{ss[f'{key}_play']}")
+        ss[f"{key}_play"] = playing
+        c2.slider("Frame", 0, n - 1, key=f"{key}_frame", label_visibility="collapsed")
+        if ss[f"{key}_play"] != ss[f"_{key}_mode"]:   # play state changed → restart the timer
+            st.rerun()
+    player()
+
+
 def setup(frames, info, vid_hash):
     n = len(frames)
     with st.container(key="card"):
         left, right = st.columns([1.1, 1], gap="large")
         with right:
             a, b = st.columns(2)
-            a.text_input("Organism Name *", key="organism", placeholder="Euglena gracilis")
-            b.text_input("Uploader Name *", key="uploader")
+            a.text_input("Organism Name *", key="organism", placeholder="e.g. Euglena gracilis")
+            b.text_input("Uploader Name *", key="uploader", placeholder="Your name")
             a.number_input("µm per pixel *", 0.0, 100.0, step=0.01, format="%.4f", key="um_in")
             b.number_input("Temperature (°C)", -10.0, 100.0, step=0.5, key="temperature")
             a.selectbox("Signal Applied *", list(LIGHT_FROM), key="light_from", format_func=LIGHT_FROM.get)
@@ -282,45 +313,60 @@ def setup(frames, info, vid_hash):
                 d.number_input("Cell size (µm)", 0.5, 100.0, step=0.5, key="cell_um",
                                help="One body length. The robots' distances are measured in it.")
 
-            missing = [f for f, ok in (("organism name", ss.organism.strip()), ("uploader name", ss.uploader.strip()),
-                                       ("µm per pixel", ss.um_in), ("frame rate", ss.fps_in)) if not ok]
-            if missing:
-                st.markdown(f"<div class='lbl' style='margin-top:1.2rem'>Brightness threshold</div>"
-                            f"<div class='note'>Fill in {', '.join(missing)} to preview which cells Seek finds."
-                            f"</div>", unsafe_allow_html=True)
-                st.button("Analyze", type="primary", width="stretch", disabled=True)
-                kept = None
-            else:
+            # detection preview needs only the scale; Analyze needs every required field
+            preview = ss.um_in > 0
+            if preview:
                 s0 = settings_for(info, 0)
                 bg = background(vid_hash, frames)
                 pol = detect.guess_polarity(frames[0], bg)
-                f = min(ss.preview, n - 1)
-                feats = detect.locate(detect.preprocess(frames[f], bg, pol), s0.diameter)
-                hi = float(feats["mass"].max()) if len(feats) else 1.0
+                first = detect.locate(detect.preprocess(frames[0], bg, pol), s0.diameter)
+                hi = float(first["mass"].max()) if len(first) else 1.0
                 if ss.get("minmass_for") != (vid_hash, s0.diameter):
-                    first = detect.locate(detect.preprocess(frames[0], bg, pol), s0.diameter)
                     ss.minmass = min(detect.suggest_minmass(first["mass"]), hi) if len(first) else 0.0
                     ss.minmass_for = (vid_hash, s0.diameter)
-                kept = feats[feats["mass"] >= ss.minmass].assign(frame=f)
-                st.markdown(f"<div class='lbl' style='margin-top:1.2rem'>Brightness threshold</div>"
-                            f"<div class='count'>{len(kept)}<span>cells found</span></div>"
-                            f"<div class='note'>Lower finds fainter cells. Raise it if noise is being marked.</div>",
-                            unsafe_allow_html=True)
+                st.markdown("<div class='lbl' style='margin-top:1.2rem'>Brightness threshold</div>"
+                            "<div class='note'>Lower finds fainter cells. Raise it if noise is being marked. "
+                            "The count on the left updates as you move it.</div>", unsafe_allow_html=True)
                 st.slider("Brightness threshold", 0.0, max(hi, 1.0), key="minmass", label_visibility="collapsed")
+            else:
+                st.markdown("<div class='lbl' style='margin-top:1.2rem'>Brightness threshold</div>"
+                            "<div class='note'>Fill in µm per pixel to see which cells Seek finds.</div>",
+                            unsafe_allow_html=True)
 
-                def start():
-                    s = settings_for(info, ss.minmass)
-                    reg = job_registry()
-                    if (vid_hash, s) not in reg or reg[(vid_hash, s)].error:
-                        reg[(vid_hash, s)] = Job(frames, s).start()
-                    ss.update(job=reg[(vid_hash, s)], phase="results", playing=True, frame=0, seen=0)
+            missing = [f for f, ok in (("organism name", ss.organism.strip()), ("uploader name", ss.uploader.strip()),
+                                       ("µm per pixel", ss.um_in), ("frame rate", ss.fps_in)) if not ok]
 
-                st.button("Analyze", type="primary", width="stretch", on_click=start)
+            def start():
+                s = settings_for(info, ss.minmass)
+                reg = job_registry()
+                if (vid_hash, s) not in reg or reg[(vid_hash, s)].error:
+                    reg[(vid_hash, s)] = Job(frames, s).start()
+                ss.update(job=reg[(vid_hash, s)], phase="results", seen=0, result_frame=0)
+
+            st.button("Analyze", type="primary", width="stretch", on_click=start, disabled=bool(missing))
+            if missing:
+                st.markdown(f"<div class='note'>To analyze, fill in: {', '.join(missing)}.</div>",
+                            unsafe_allow_html=True)
         with left:
             um_eff = ss.um_in / info["scale"] if ss.um_in else None
-            st.image(overlay.draw(frames[min(ss.preview, n - 1)], 0, None, kept, ["Markers"] if kept is not None
-                                  else [], um_eff), width="stretch", output_format="JPEG")
-            st.slider("Frame", 0, n - 1, key="preview", label_visibility="collapsed")
+            found = {}
+
+            def detect_frame(f):
+                if f not in found:
+                    feats = detect.locate(detect.preprocess(frames[f], bg, pol), s0.diameter)
+                    found[f] = feats[feats["mass"] >= ss.minmass].assign(frame=f)
+                return found[f]
+
+            def draw(f):
+                kept = detect_frame(f) if preview else None
+                return overlay.draw(frames[f], f, None, kept, ["Markers"] if preview else [], um_eff)
+
+            def count(f):
+                if not preview:
+                    return "<span>Fill in µm per pixel to detect cells</span>"
+                return f"<b>{len(detect_frame(f))}</b> cells detected<span>frame {f + 1} of {n}</span>"
+
+            video_player("setup", n, ss.fps_in or info["fps"], draw, count)
             st.markdown(f"<div class='note'>{info['n_frames_in_file']} frames · {info['width']}×{info['height']} px"
                         f"{' · ' + format(info['fps'], 'g') + ' fps' if info['fps'] else ''}</div>",
                         unsafe_allow_html=True)
@@ -343,22 +389,25 @@ def results(frames, info, vid_hash, name, video_bytes):
     with st.container(key="card"):
         left, right = st.columns([1.1, 1], gap="large")
         with left:
-            @st.fragment(run_every=0.12 if ss.get("playing", True) else (0.5 if not job.finished else None))
-            def player():
-                if ss.get("playing", True):
-                    ss.frame = (ss.get("frame", 0) + max(1, round((job.s.fps or 10) * 0.12))) % n
-                layers = ["Tracks", "Markers"] if "link" in job.done else (["Markers"] if job.features is not None
-                                                                           else [])
-                st.image(overlay.draw(frames[ss.frame], ss.frame, job.df if "link" in job.done else None,
-                                      job.features, layers, um_eff, job.s.R_um, job.s.signal_dir),
-                         width="stretch", output_format="JPEG")
-                c1, c2 = st.columns([1, 5], vertical_alignment="center")
-                c1.toggle("Play", key="playing")
-                c2.slider("Frame", 0, n - 1, key="frame", label_visibility="collapsed")
-                if job.finished and ss.get("seen") != "done":
-                    ss.seen = "done"
-                    st.rerun()
-            player()
+            def draw(f):
+                linked = "link" in job.done
+                layers = ["Tracks", "Markers"] if linked else (["Markers"] if job.features is not None else [])
+                return overlay.draw(frames[f], f, job.df if linked else None, job.features, layers, um_eff,
+                                    job.s.R_um, job.s.signal_dir)
+
+            def count(f):
+                if "link" in job.done and job.df is not None:
+                    k = int((job.df["frame"] == f).sum())
+                    return f"<b>{k}</b> cells tracked<span>frame {f + 1} of {n}</span>"
+                if job.features is not None:
+                    k = int((job.features["frame"] == f).sum())
+                    return f"<b>{k}</b> cells detected<span>frame {f + 1} of {n} · linking…</span>"
+                return f"<span>Detecting cells… {job.progress:.0%}</span>"
+
+            video_player("result", n, job.s.fps, draw, count)
+            if job.finished and ss.get("seen") != "done":
+                ss.seen = "done"
+                st.rerun()
         with right:
             measured(job)
     if job.finished and not job.error:
@@ -531,19 +580,18 @@ def record_player(arc, rec):
         return
     df = _tracks(rec["record_code"], arc, rec["tracks_key"])
     n = len(frames)
-    ss.setdefault("rec_play", True)
+    per_frame = df.groupby("frame").size()
 
-    @st.fragment(run_every=0.12 if ss.rec_play else None)
-    def player():
-        if ss.rec_play:
-            ss.rec_frame = (ss.get("rec_frame", 0) + max(1, round((rec["fps"] or 10) * 0.12))) % n
-        ss.rec_frame = min(ss.get("rec_frame", 0), n - 1)
-        st.image(overlay.draw(frames[ss.rec_frame], ss.rec_frame, df, None, ["Tracks", "Markers"], s.get("um_per_px"),
-                              s.get("R_um", 10.0), s.get("signal_dir")), width="stretch", output_format="JPEG")
-        c1, c2 = st.columns([1, 5], vertical_alignment="center")
-        c1.toggle("Play", key="rec_play")
-        c2.slider("Frame", 0, n - 1, key="rec_frame", label_visibility="collapsed")
-    player()
+    def draw(f):
+        return overlay.draw(frames[f], f, df, None, ["Tracks", "Markers"], s.get("um_per_px"), s.get("R_um", 10.0),
+                            s.get("signal_dir"))
+
+    def count(f):
+        return f"<b>{int(per_frame.get(f, 0))}</b> cells tracked<span>frame {f + 1} of {n}</span>"
+
+    if ss.get("rec_code") != rec["record_code"]:      # a different record → start from its first frame
+        ss.rec_code, ss.record_frame = rec["record_code"], 0
+    video_player("record", n, rec["fps"], draw, count)
 
 
 def cells_to_robots(prof):
