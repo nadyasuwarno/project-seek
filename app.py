@@ -115,15 +115,19 @@ def style():
     /* drop zone */
     .st-key-drop [data-testid="stFileUploaderDropzone"] {{background: {PANEL}; border: 1px solid {EDGE};
         border-radius: 36px; min-height: 260px; display: flex; flex-direction: column; justify-content: center;
-        align-items: center; gap: .8rem;}}
+        align-items: center; gap: .8rem; position: relative;}}
     .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"] span,
     .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"] small {{display: none;}}
     .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"] svg {{width: 52px; height: 52px; color: #BDBDBD;}}
-    .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"]::after {{content: "Drop a microscope video";
-        display: block; color: #BDBDBD; font-size: 1.5rem; margin-top: .4rem;}}
+    .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"]::after {{content: "Drop what you see under your microscope";
+        display: block; color: #BDBDBD; font-size: 1.5rem; margin-top: 3.2rem;}}
     .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"] > div {{display: flex; flex-direction: column;
         align-items: center;}}
-    .st-key-drop button {{border-radius: 999px; border: 1px solid {EDGE}; background: #fff; color: {MUTED};}}
+    .st-key-drop [data-testid="stFileUploaderDropzoneInstructions"] svg {{display: none;}}
+    /* the Upload button sits just above the text, in the middle of the box (whatever the Streamlit version) */
+    .st-key-drop [data-testid="stFileUploaderDropzone"] button {{position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -110%); border-radius: 999px; border: 1px solid {EDGE}; background: #fff;
+        color: {MUTED};}}
     /* type */
     .hero {{font-size: 6.4rem; font-weight: 700; letter-spacing: -.03em; line-height: 1; margin: 3rem 0 2rem;}}
     .q {{font-size: 1.5rem; margin-bottom: .5rem;}}
