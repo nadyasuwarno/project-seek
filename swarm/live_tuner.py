@@ -28,7 +28,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
 from rps.utilities.barrier_certificates import create_uni_barrier_certificate_with_boundary
 
-from swarm.sim import (ARENA, DT, LIGHT_COLORS, at_lights, decide, initial_poses, metrics,
+from swarm.sim import (ARENA, AT_LIGHT_M, DT, LIGHT_COLORS, at_lights, decide, initial_poses, metrics,
                        profile_to_params)
 
 INK, MUTED, FAINT, PANEL, EDGE = "#111111", "#8A8A8A", "#CFCFCF", "#F3F3F3", "#DADADA"
@@ -58,7 +58,8 @@ class Pill:
         self.text = self.ax.text(w_in / 2, h_in / 2, label, ha="center", va="center", fontsize=13,
                                  color=color, weight="bold")
         if caption:
-            fig.text(rect[0] + 0.012, rect[1] + rect[3] + 0.01, caption, fontsize=9, color=caption_color)
+            fig.text(rect[0] + rect[2] / 2, rect[1] + rect[3] + 0.012, caption, fontsize=9.5, color=caption_color,
+                     ha="center", va="bottom")
 
     def highlight(self, on):
         self.box.set_edgecolor(INK if on else "none"); self.box.set_linewidth(2 if on else 0)
@@ -83,6 +84,7 @@ class Simulator:
                                        initial_conditions=initial_poses(self.n, self.rng), skip_initialization=True)
         self.t, self.state, self.lights, self.armed = 0.0, {}, {}, None
         self.placed, self.reached = {}, set()
+        self.at = {c: set() for c in LIGHT_COLORS}           # robot numbers currently at each light
         self.hist = {k: deque(maxlen=int(HISTORY_S / DT)) for k in ("t", "pol", "nnd", "blue", "red")}
         self.trail = deque(maxlen=TRAIL)
         self.events = []
@@ -103,14 +105,33 @@ class Simulator:
                      ("red", share.get("red", np.nan))):
             self.hist[k].append(v)
         self.trail.append(pos.copy())
+        self.arrivals(pos)
         for c, s in share.items():
             if s >= 0.5 and c not in self.reached:
                 self.reached.add(c)
                 self.log(f"half the swarm reached the {c} light in {self.t - self.placed[c]:.1f} s")
         return pos, head
 
+    def arrivals(self, pos):
+        """Log each robot that reaches or leaves a light (a little slack on leaving, so the edge doesn't flicker)."""
+        for c in LIGHT_COLORS:
+            if c not in self.lights:
+                self.at[c].clear()
+                continue
+            d = np.linalg.norm(pos - np.asarray(self.lights[c])[:, None], axis=0)
+            for i in range(self.n):
+                rid = i + 1
+                if rid not in self.at[c] and d[i] < AT_LIGHT_M:
+                    self.at[c].add(rid)
+                    self.log(f"robot {rid} reached the {c} light · {len(self.at[c])} at {c}")
+                elif rid in self.at[c] and d[i] > AT_LIGHT_M * 1.4:
+                    self.at[c].discard(rid)
+                    self.log(f"robot {rid} left the {c} light · {len(self.at[c])} at {c}")
+
     def log(self, text):
+        """Shown under the arena and printed in the terminal that started Seek."""
         self.events.append((self.t, text))
+        print(f"[Seek Simulator · {self.code}] {self.t:7.1f} s  {text}", flush=True)
 
     # ── interaction ────────────────────────────────────────────────────────
     def click(self, ev):
@@ -142,6 +163,7 @@ class Simulator:
 
     # ── layout ─────────────────────────────────────────────────────────────
     def build(self):
+        matplotlib.rcParams["toolbar"] = "None"
         self.fig = fig = plt.figure(figsize=(15, 9.6), facecolor="white")
         try:
             fig.canvas.manager.set_window_title(f"Seek Simulator · {self.code}")
@@ -150,18 +172,18 @@ class Simulator:
         fig.text(0.035, 0.935, "Seek", fontsize=26, weight="bold", color=INK)
         fig.text(0.035, 0.895, "Simulator", fontsize=26, weight="bold", color=MUTED)
 
-        panel(fig, 0.035, 0.775, 0.60, 0.085)
+        panel(fig, 0.035, 0.765, 0.60, 0.105)
         self.pills = {
-            "blue": Pill(fig, [0.055, 0.795, 0.11, 0.045], LIGHT["blue"]["label"], LIGHT["blue"]["fill"],
+            "blue": Pill(fig, [0.055, 0.778, 0.11, 0.045], LIGHT["blue"]["label"], LIGHT["blue"]["fill"],
                          LIGHT["blue"]["text"], self.p["lights"]["blue"]["role"], "#7FA7E8"),
-            "red": Pill(fig, [0.20, 0.795, 0.11, 0.045], LIGHT["red"]["label"], LIGHT["red"]["fill"],
+            "red": Pill(fig, [0.20, 0.778, 0.11, 0.045], LIGHT["red"]["label"], LIGHT["red"]["fill"],
                         LIGHT["red"]["text"], self.p["lights"]["red"]["role"], "#EE8A8A"),
-            "release": Pill(fig, [0.345, 0.795, 0.11, 0.045], "Release", "#A3A3A3", "white"),
-            "reset": Pill(fig, [0.49, 0.795, 0.11, 0.045], "Reset", "#A3A3A3", "white"),
+            "release": Pill(fig, [0.345, 0.778, 0.11, 0.045], "Release", "#A3A3A3", "white"),
+            "reset": Pill(fig, [0.49, 0.778, 0.11, 0.045], "Reset", "#A3A3A3", "white"),
         }
 
-        panel(fig, 0.035, 0.235, 0.60, 0.515)
-        self.ax = ax = fig.add_axes([0.05, 0.25, 0.57, 0.485])
+        panel(fig, 0.035, 0.235, 0.60, 0.51)
+        self.ax = ax = fig.add_axes([0.05, 0.25, 0.57, 0.48])
         ax.set_xlim(ARENA[0] - 0.05, ARENA[1] + 0.05); ax.set_ylim(ARENA[2] - 0.05, ARENA[3] + 0.05)
         ax.set_aspect("equal"); ax.axis("off")
         ax.add_patch(Rectangle((ARENA[0], ARENA[2]), 3.2, 2.0, fill=False, ec=FAINT, lw=1))
@@ -175,9 +197,11 @@ class Simulator:
         self.noses = LineCollection([], colors="white", linewidths=1.3, zorder=5)
         ax.add_collection(self.noses)
         self.hint = ax.text(0, ARENA[3] - 0.12, "", ha="center", fontsize=11, color=MUTED, zorder=6)
+        self.ids = [ax.text(0, 0, str(i + 1), fontsize=7.5, color=MUTED, zorder=6, ha="left", va="bottom")
+                    for i in range(self.n)]
 
-        self.status = fig.text(0.045, 0.205, "", fontsize=10, color=MUTED, va="top", family="monospace",
-                               linespacing=1.6)
+        self.status = fig.text(0.045, 0.215, "", fontsize=9.5, color=MUTED, va="top", family="monospace",
+                               linespacing=1.45)
 
         charts = [("Alignment (polarization)", "pol", "polarization"),
                   ("Spacing (body lengths)", "nnd", "nnd_bl"),
@@ -223,6 +247,9 @@ class Simulator:
     def draw(self, _frame=None):
         pos, head = self.tick()
         self.bodies.set_offsets(pos.T)
+        for i, label in enumerate(self.ids):
+            label.set_position((pos[0, i] + 0.05, pos[1, i] + 0.04))
+            label.set_color(next((LIGHT[c]["text"] for c in LIGHT_COLORS if i + 1 in self.at[c]), MUTED))
         self.noses.set_segments([[(pos[0, i], pos[1, i]),
                                   (pos[0, i] + 0.075 * np.cos(head[i]), pos[1, i] + 0.075 * np.sin(head[i]))]
                                  for i in range(self.n)])
@@ -255,7 +282,7 @@ class Simulator:
         lines = [f"Profile: {self.code}",
                  f"Simulator speed: {speed:.2f} x real time" + (f"  (1 s robot ≈ {ts:g} s cells)" if ts else ""),
                  *self.sources(), ""]
-        lines += [f"{et:6.1f} s  {txt}" for et, txt in self.events[-4:]]
+        lines += [f"{et:6.1f} s  {txt}" for et, txt in self.events[-5:]]
         self.status.set_text("\n".join(lines))
         return ()
 
