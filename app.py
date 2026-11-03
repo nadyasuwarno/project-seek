@@ -244,7 +244,9 @@ def landing():
                 "<div class='q'>Can you take back what you’ve set free?</div>"
                 "<div class='lede'>Every living thing begins with instinct, a pull it never chose. Some learn to "
                 "want something else and become outliers. Seek asks what happens next: once something has chosen "
-                "a path against its nature, can the world still call it back, and does it answer?</div>",
+                "a path against its nature, can the world still call it back, and does it answer?</div>"
+                "<div class='lede' style='margin-top:1.2rem'>The robots were taught to go to the blue light. "
+                "The red light is brighter and easier to notice.</div>",
                 unsafe_allow_html=True)
     st.markdown("""<div class='steps'>
       <div><i>1</i><b>Drop a video</b><span>Seek finds and follows every cell in the microscope footage.</span></div>

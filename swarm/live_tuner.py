@@ -8,6 +8,7 @@ Every number comes from the profile (fitted from a Seek record) — there are no
     Blue Light / Red Light   arm a light, then click the arena to place it (click again to move it)
     Release                  turn every light off: the swarm is on its own again
     Reset                    new robots, no lights
+    Save picture             saves the window as a PNG in Downloads/Seek
 
 Each light pulls the robots by: instinct (measured by Seek from cells filmed under that light)
 + training (a set value until the learning step exists). The log under the arena shows both.
@@ -160,6 +161,21 @@ class Simulator:
                 self.pills[c].highlight(False)
         elif name == "reset":
             self.reset()
+        elif name == "save":
+            self.save_picture()
+
+    def save_picture(self):
+        """Save the whole window as a PNG in Downloads/Seek (or data/swarm/pictures if there's no Downloads)."""
+        folder = Path.home() / "Downloads" / "Seek"
+        if not (Path.home() / "Downloads").is_dir():
+            folder = Path("data/swarm/pictures")
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{self.code}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.png"
+        hint = self.hint.get_text()
+        self.hint.set_text("")
+        self.fig.savefig(path, dpi=150, facecolor="white")
+        self.hint.set_text(hint)
+        self.log(f"picture saved: {path}")
 
     # ── layout ─────────────────────────────────────────────────────────────
     def build(self):
@@ -180,7 +196,9 @@ class Simulator:
                         LIGHT["red"]["text"], self.p["lights"]["red"]["role"], "#EE8A8A"),
             "release": Pill(fig, [0.345, 0.778, 0.11, 0.045], "Release", "#A3A3A3", "white"),
             "reset": Pill(fig, [0.49, 0.778, 0.11, 0.045], "Reset", "#A3A3A3", "white"),
+            "save": Pill(fig, [0.49, 0.905, 0.11, 0.04], "Save picture", "#E4E4E4", INK),
         }
+        self.pills["save"].text.set_fontsize(11.5)
 
         panel(fig, 0.035, 0.235, 0.60, 0.51)
         self.ax = ax = fig.add_axes([0.05, 0.25, 0.57, 0.48])
