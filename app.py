@@ -101,6 +101,10 @@ def style():
     [class*="st-key-nav-"] a {{border-radius: 999px; justify-content: center; padding: .5rem 1rem;}}
     [class*="st-key-nav-"] a p {{color: #fff !important; font-size: .9rem;}}
     .st-key-nav-on a {{background: {INK};}} .st-key-nav-off a {{background: #A3A3A3;}}
+    .st-key-open-saved a {{background: {INK}; border-radius: 999px; justify-content: center;}}
+    .st-key-open-saved a p {{color: #fff !important;}}
+    /* layers: a small extra under the video */
+    [class*="st-key-layers-"] button {{border-radius: 999px; font-size: .8rem; min-height: 0; padding: .2rem .8rem;}}
     .st-key-nav-off a:hover {{background: #8f8f8f;}}
     /* cards */
     .st-key-card {{background: {PANEL}; border: 1px solid {EDGE}; border-radius: 36px; padding: 2.2rem 2.4rem;}}
@@ -213,7 +217,8 @@ def terminal():
         vid_hash, name, video_bytes, size = "demo-blue", "demo_cells_blue_light.mp4", None, "demo"
 
     if ss.get("vid_hash") != vid_hash:      # new video → fresh state, prefilled from the file
-        ss.update(vid_hash=vid_hash, phase="setup", job=None, saved_code=None, setup_frame=0, result_frame=0,
+        ss.update(vid_hash=vid_hash, phase="setup", job=None, saved_code=None, save_pending=False,
+                  setup_frame=0, result_frame=0,
                   fps_in=float(info["fps"] or 0.0))
         if meta:
             ss.update(organism="Demo cells", uploader="Seek demo", um_in=meta["um_per_px"], temperature=25.0,
@@ -271,10 +276,17 @@ def play_step(fps):
     return max(1, round((fps or 10) * 0.15))       # frames to advance per refresh, so playback runs near real time
 
 
-def video_player(key, n, fps, draw, count_text):
+def video_player(key, n, fps, draw, count_text, layers=None, default_layers=("Tracks", "Markers")):
     """Every video in Seek: live count line on top, the frame, then Play + frame slider.
-    `draw(f)` returns the image for frame f; `count_text(f)` the live line above it."""
+    `draw(f, layers)` returns the image for frame f; `count_text(f)` the live line above it.
+    `layers`: overlays available to switch on (an optional extra, tucked into a small Layers menu)."""
     ss.setdefault(f"{key}_play", True)
+    if layers:
+        if not ss.get(f"_{key}_layers_set"):          # first time layers exist → switch the defaults on
+            ss[f"{key}_layers"] = [x for x in default_layers if x in layers]
+            ss[f"_{key}_layers_set"] = True
+            ss[f"_{key}_layers_ver"] = ss.get(f"_{key}_layers_ver", 0) + 1
+        ss[f"{key}_layers"] = [x for x in ss.get(f"{key}_layers", []) if x in layers]
     ss.setdefault(f"{key}_frame", 0)
     ss[f"_{key}_mode"] = ss[f"{key}_play"]
 
@@ -284,11 +296,17 @@ def video_player(key, n, fps, draw, count_text):
             ss[f"{key}_frame"] = (ss[f"{key}_frame"] + play_step(fps)) % n
         f = min(ss[f"{key}_frame"], n - 1)
         st.markdown(f"<div class='live'>{count_text(f)}</div>", unsafe_allow_html=True)
-        st.image(draw(f), width="stretch", output_format="JPEG")
-        c1, c2 = st.columns([1, 5], vertical_alignment="center")
+        st.image(draw(f, ss.get(f"{key}_layers")), width="stretch", output_format="JPEG")
+        c1, c2, c3 = st.columns([1.3, 3.4, 1.5] if layers else [1.3, 4.9, 0.01], vertical_alignment="center")
         playing = c1.toggle("Play", value=ss[f"{key}_play"], key=f"{key}_play_{ss[f'{key}_play']}")
         ss[f"{key}_play"] = playing
         c2.slider("Frame", 0, n - 1, key=f"{key}_frame", label_visibility="collapsed")
+        if layers:
+            with c3, st.container(key=f"layers-{key}"), st.popover("Layers", width="stretch"):
+                chosen = st.pills("Extra views of what Seek measured", layers, selection_mode="multi",
+                                  default=ss[f"{key}_layers"],
+                                  key=f"{key}_pills_{ss.get(f'_{key}_layers_ver', 0)}")
+                ss[f"{key}_layers"] = list(chosen or [])
         if ss[f"{key}_play"] != ss[f"_{key}_mode"]:   # play state changed → restart the timer
             st.rerun()
     player()
@@ -343,7 +361,8 @@ def setup(frames, info, vid_hash):
                 reg = job_registry()
                 if (vid_hash, s) not in reg or reg[(vid_hash, s)].error:
                     reg[(vid_hash, s)] = Job(frames, s).start()
-                ss.update(job=reg[(vid_hash, s)], phase="results", seen=0, result_frame=0)
+                ss.update(job=reg[(vid_hash, s)], phase="results", seen=0, result_frame=0, saved_code=None,
+                          save_pending=False, _result_layers_set=False)
 
             st.button("Analyze", type="primary", width="stretch", on_click=start, disabled=bool(missing))
             if missing:
@@ -359,7 +378,7 @@ def setup(frames, info, vid_hash):
                     found[f] = feats[feats["mass"] >= ss.minmass].assign(frame=f)
                 return found[f]
 
-            def draw(f):
+            def draw(f, _layers=None):
                 kept = detect_frame(f) if preview else None
                 return overlay.draw(frames[f], f, None, kept, ["Markers"] if preview else [], um_eff)
 
@@ -391,9 +410,11 @@ def results(frames, info, vid_hash, name, video_bytes):
     with st.container(key="card"):
         left, right = st.columns([1.1, 1], gap="large")
         with left:
-            def draw(f):
+            ready = [layer for k, layer, _ in STAGES if k in job.done] + (["IDs"] if "link" in job.done else [])
+
+            def draw(f, layers):
                 linked = "link" in job.done
-                layers = ["Tracks", "Markers"] if linked else (["Markers"] if job.features is not None else [])
+                layers = layers or (["Markers"] if job.features is not None else [])
                 return overlay.draw(frames[f], f, job.df if linked else None, job.features, layers, um_eff,
                                     job.s.R_um, job.s.signal_dir)
 
@@ -406,13 +427,17 @@ def results(frames, info, vid_hash, name, video_bytes):
                     return f"<b>{k}</b> cells detected<span>frame {f + 1} of {n} · linking…</span>"
                 return f"<span>Detecting cells… {job.progress:.0%}</span>"
 
-            video_player("result", n, job.s.fps, draw, count)
-            if job.finished and ss.get("seen") != "done":
-                ss.seen = "done"
-                st.rerun()
+            video_player("result", n, job.s.fps, draw, count, layers=ready)
         with right:
-            measured(job)
-    if job.finished and not job.error:
+            # refreshes itself while the analysis runs; one full refresh when it finishes
+            @st.fragment(run_every=None if job.finished else 0.5)
+            def panel():
+                measured(job)
+                if job.finished and ss.get("seen") != "done":
+                    ss.seen = "done"
+                    st.rerun()
+            panel()
+    if not job.error:
         save_box(job, frames, info, vid_hash, name, video_bytes)
 
 
@@ -448,16 +473,8 @@ def measured(job):
 def save_box(job, frames, info, vid_hash, name, video_bytes):
     st.write("")
     arc = archive()
-    if ss.get("saved_code"):
-        c1, c2 = st.columns([3, 1.3], vertical_alignment="center")
-        c1.markdown(f"Saved to the Archives as **{ss.saved_code}**. Open it there to send it to the Simulator.")
-        with c2, st.container(key="nav-on"):
-            st.page_link(ARCHIVES, label=f"Open {ss.saved_code} →", query_params={"id": ss.saved_code})
-        return
-    c1, c2 = st.columns([3, 1.3], vertical_alignment="bottom")
-    title = c1.text_input("Save this recording to the Archives?", key="save_title",
-                          placeholder=f"{ss.organism} · {conditions()['signal'] or 'no light'}")
-    if c2.button("Save to Archives", type="primary", width="stretch"):
+
+    def save():
         me = arc.owner()
         video = video_bytes or io.write_mp4([np.repeat(f[..., None], 3, -1) for f in frames], job.s.fps)
         n = len(frames)
@@ -466,13 +483,38 @@ def save_box(job, frames, info, vid_hash, name, video_bytes):
                              "resolution_px": f"{info['width']}×{info['height']}", "analyzed_width_px": frames.shape[2]},
                  "0c_conditions": conditions()}
         settings = {**job.s.as_dict(), "polarity_used": job.polarity, "resize_scale": info["scale"]}
-        with st.spinner("Saving…"):
+        with st.spinner("Saving to the Archives…"):
             ss.saved_code = arc.submit(me["id"], video=video, video_name=name, tier0=tier0, settings=settings,
-                                       summary=summary(job.df), tracks=job.df, title=title, note="",
-                                       elapsed_s=job.elapsed_s, file_hash=vid_hash)
+                                       summary=summary(job.df), tracks=job.df, title=ss.get("save_title", ""),
+                                       note="", elapsed_s=job.elapsed_s, file_hash=vid_hash)
+        ss.save_pending = False
+
+    if ss.get("save_pending") and job.finished and not ss.get("saved_code"):
+        save()                                   # pressed while analysing → saved the moment it finished
+    if ss.get("saved_code"):
+        c1, c2 = st.columns([3, 1.3], vertical_alignment="center")
+        c1.markdown(f"Saved to the Archives as **{ss.saved_code}**. Open it there to send it to the Simulator.")
+        with c2, st.container(key="open-saved"):
+            st.page_link(ARCHIVES, label=f"Open {ss.saved_code} →", query_params={"id": ss.saved_code})
+        return
+
+    c1, c2 = st.columns([3, 1.3], vertical_alignment="bottom")
+    c1.text_input("Save this recording to the Archives?", key="save_title",
+                  placeholder=f"{ss.organism} · {conditions()['signal'] or 'no light'}")
+    if ss.get("save_pending"):
+        c2.button("Saving when ready…", type="primary", width="stretch", disabled=True)
+        st.markdown("<div class='note'>It will be saved automatically the moment the analysis finishes.</div>",
+                    unsafe_allow_html=True)
+        return
+    if c2.button("Save to Archives", type="primary", width="stretch"):
+        if job.finished:
+            save()
+        else:
+            ss.save_pending = True
         st.rerun()
     st.markdown("<div class='note'>Saving keeps the video with every cell's track, so it can be opened in the "
-                "Simulator from the Archives.</div>", unsafe_allow_html=True)
+                "Simulator from the Archives. You can press it now, even while Seek is still analysing.</div>",
+                unsafe_allow_html=True)
 
 
 # ══ Archives ══════════════════════════════════════════════════════════════════════════
@@ -584,16 +626,20 @@ def record_player(arc, rec):
     n = len(frames)
     per_frame = df.groupby("frame").size()
 
-    def draw(f):
-        return overlay.draw(frames[f], f, df, None, ["Tracks", "Markers"], s.get("um_per_px"), s.get("R_um", 10.0),
-                            s.get("signal_dir"))
+    have = {"Velocity": "speed_um_s", "Neighbors": "nn_dist_um", "Alignment": "alignment",
+            "Signal": "signal_drift_um_s", "Density": "neighbors_in_R"}
+    layers = ["Markers", "Tracks"] + [k for k, col in have.items() if col in df] + ["IDs"]
+
+    def draw(f, chosen):
+        return overlay.draw(frames[f], f, df, None, chosen or ["Tracks", "Markers"], s.get("um_per_px"),
+                            s.get("R_um", 10.0), s.get("signal_dir"))
 
     def count(f):
         return f"<b>{int(per_frame.get(f, 0))}</b> cells tracked<span>frame {f + 1} of {n}</span>"
 
     if ss.get("rec_code") != rec["record_code"]:      # a different record → start from its first frame
-        ss.rec_code, ss.record_frame = rec["record_code"], 0
-    video_player("record", n, rec["fps"], draw, count)
+        ss.rec_code, ss.record_frame, ss._record_layers_set = rec["record_code"], 0, False
+    video_player("record", n, rec["fps"], draw, count, layers=layers)
 
 
 def cells_to_robots(prof):
