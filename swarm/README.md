@@ -21,6 +21,18 @@ pip install -r requirements.txt          # Seek
 pip install -r requirements-swarm.txt    # simulator: matplotlib, cvxopt, Robotarium
 ```
 
+## The Seek Simulator window
+
+Opened by **Open in Simulator** on a record in the Archives. No sliders: every number comes from the record.
+
+- **Blue Light** (default training target) / **Red Light** (intervene with what's more visible): press one,
+  then click the arena to place it; click again to move it. **Release** turns every light off; **Reset** starts over.
+- Each light pulls the robots by **instinct + training**. Instinct is measured by Seek from cells filmed under that
+  light (drift toward the light ÷ speed). Training is a set value until the learning step exists
+  (`lights` in the profile; blue 0.5, red 0). A colour no cells were filmed under has no instinct.
+- Charts: alignment and spacing (dashed = the cells), and the share of robots at each light.
+- The log under the arena shows where every pull came from, and when half the swarm reached a light.
+
 ## Use it from Seek
 
 1. `streamlit run app.py` → **Repository** → open a record.

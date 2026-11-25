@@ -41,6 +41,27 @@ def cell_length_um(settings: dict) -> float | None:
     return None
 
 
+def light_color(rec: dict) -> str | None:
+    """The light the cells were filmed under, as Seek's form saved it ("Blue light", "Red light")."""
+    text = (rec.get("signal") or "").lower()
+    return next((c for c in ("blue", "red") if c in text), None)
+
+
+def measure_instinct(tracks: pd.DataFrame, rec: dict) -> dict:
+    """Instinct = how strongly the cells moved toward the light: mean drift toward it ÷ mean speed.
+    1 = every cell swims straight at the light · 0 = no preference · negative = they move away."""
+    color, direction = light_color(rec), rec.get("signal_dir")
+    if not color or not direction or direction == "none" or "signal_drift_um_s" not in tracks:
+        return {}
+    mv = tracks[tracks["speed_um_s"] > 0]
+    if mv.empty or mv["speed_um_s"].mean() <= 0:
+        return {}
+    pull = float(mv["signal_drift_um_s"].mean() / mv["speed_um_s"].mean())
+    return {color: {"pull": round(pull, 3), "source": f"Seek record {rec['record_code']}",
+                    "light_from": direction,
+                    "how": "mean drift toward the light ÷ mean swimming speed"}}
+
+
 def profile_for_record(arc, rec: dict, cell_um: float | None = None) -> dict:
     """Fit a profile from a saved Seek record (as returned by Archive.get_record)."""
     how = "given by the researcher" if cell_um else "Seek settings: diameter × µm/px"
@@ -49,7 +70,11 @@ def profile_for_record(arc, rec: dict, cell_um: float | None = None) -> dict:
         raise ValueError("This record has no cell diameter in its settings — pass the cell length in µm.")
     meta = {"source": f"Seek record {rec['record_code']}", "record_code": rec["record_code"],
             "organism": rec.get("organism"), "cell_um_from": how}
-    prof = fit(arc.tracks(rec), cell_um, meta)
+    tracks = arc.tracks(rec)
+    prof = fit(tracks, cell_um, meta)
+    prof["record_code"] = rec["record_code"]
+    prof["organism"] = rec.get("organism")
+    prof["instinct"] = measure_instinct(tracks, rec)
     prof["experiment"] = DEFAULT_EXPERIMENT
     return prof
 

@@ -17,6 +17,52 @@ MAX_ROBOTS = 22                               # the Robotarium can place at most
 WHEEL_MAX_M_S = 0.19                          # keep the outer wheel under the 0.2 m/s motor limit
 
 
+# ── lights ──────────────────────────────────────────────────────────────────────────
+# A robot's pull toward a light = instinct (measured by Seek from cells filmed under that light)
+#                                + training (set here until the learning step exists).
+LIGHT_COLORS = ("blue", "red")
+LIGHT_DEFAULTS = {
+    "blue": {"role": "Default training target", "brightness": 0.6, "trained_pull": 0.5},
+    "red": {"role": "Intervene with what's more visible", "brightness": 1.0, "trained_pull": 0.0},
+}
+LIGHT_REACH_M = 1.5          # a light's brightness halves (roughly) at this distance
+AT_LIGHT_M = 0.35            # a robot this close to a light counts as "at" it (about 3 body lengths)
+
+
+def light_pulls(raw: dict) -> dict:
+    """Per colour: total pull (−0.95…0.95; negative = moves away), and where each part came from."""
+    cfg, inst = raw.get("lights") or {}, raw.get("instinct") or {}
+    out = {}
+    for c in LIGHT_COLORS:
+        d = {**LIGHT_DEFAULTS[c], **(cfg.get(c) or {})}
+        measured = inst.get(c) or {}
+        instinct = measured.get("pull")
+        out[c] = {"pull": float(np.clip((instinct or 0.0) + d["trained_pull"], -0.95, 0.95)),
+                  "instinct": instinct, "instinct_source": measured.get("source"),
+                  "trained": d["trained_pull"], "brightness": d["brightness"], "role": d["role"]}
+    return out
+
+
+def light_steer(p, lights, pulls):
+    """Blend toward/away from lights. Returns (direction, share of the decision the lights take)."""
+    total, share = np.zeros(2), 0.0
+    for c, xy in (lights or {}).items():
+        rel = np.asarray(xy, float) - p
+        d = np.linalg.norm(rel)
+        if d < 1e-6:
+            continue
+        a = pulls[c]["pull"] * pulls[c]["brightness"] / (1 + (d / LIGHT_REACH_M) ** 2)
+        total += a * rel / d
+        share += abs(a)
+    return total, min(share, 0.95)
+
+
+def at_lights(pos, lights) -> dict:
+    """Share of robots within AT_LIGHT_M of each light."""
+    return {c: float(np.mean(np.linalg.norm(pos - np.asarray(xy, float)[:, None], axis=0) < AT_LIGHT_M))
+            for c, xy in (lights or {}).items()}
+
+
 def profile_to_params(p: dict) -> dict:
     """Behavior profile (body lengths) → simulator parameters (metres, radians)."""
     bl = BODY_LENGTH_M
@@ -27,7 +73,8 @@ def profile_to_params(p: dict) -> dict:
             "blind": np.deg2rad(p.get("blind_angle_deg", 60)),
             "speed": p["speed_bl_per_s"] * bl,
             "max_turn": np.deg2rad(p["max_turn_rate_deg_per_s"]),
-            "noise": np.deg2rad(p["heading_noise_deg"])}
+            "noise": np.deg2rad(p["heading_noise_deg"]),
+            "lights": light_pulls(p)}
 
 
 def load_profile(path) -> dict:
@@ -129,14 +176,15 @@ def steer(theta, desired_dir, speed, max_turn, gain=3.0, wander=0.0):
 WANDER_TAU_S = 0.3   # smoothness of the random wander (seconds); same total drift, without wheel-breaking spikes
 
 
-def decide(pos, head, prof, rng, target=None, state=None):
+def decide(pos, head, prof, rng, target=None, state=None, lights=None):
     """One tick for the whole swarm: rules (or a human target) + wall avoidance + heading wander → (v, ω) per robot.
     Used by the live window, recorded runs and the fidelity check, so all three behave identically.
 
     heading_noise_deg = how much a robot's heading wanders at random per 0.033 s tick (a random walk),
     the same quantity the bridge measures on cells (heading change per body length travelled).
     The wander is smooth (an Ornstein–Uhlenbeck turn rate, correlation time WANDER_TAU_S) with the same
-    long-run drift as a per-tick random walk; pass the same `state` dict every tick to keep it continuous."""
+    long-run drift as a per-tick random walk; pass the same `state` dict every tick to keep it continuous.
+    `lights` = {"blue": (x, y), "red": (x, y)}: each pulls by prof["lights"][colour] (see light_pulls)."""
     n = pos.shape[1]
     state = {} if state is None else state
     w = state.get("wander")
@@ -151,6 +199,9 @@ def decide(pos, head, prof, rng, target=None, state=None):
     dxu = np.zeros((2, n))
     for i in range(n):
         d = unit(np.asarray(target) - pos[:, i]) if target is not None else want[:, i]
+        if lights and target is None:
+            pull, share = light_steer(pos[:, i], lights, prof["lights"])
+            d = unit((1 - share) * d + pull)
         d = unit(d + 1.5 * wall_push(pos[:, i]))
         dxu[:, i] = steer(head[i], d, prof["speed"], prof["max_turn"], wander=w[i] * DT)
     return dxu

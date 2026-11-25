@@ -1,21 +1,17 @@
 """
-swarm.live_tuner — run the swarm in real time and change its rules while it moves.
+swarm.live_tuner — the Seek Simulator window.
 
-Opened by Seek's "Open live swarm" button, or from a terminal inside project-seek:
-    python -m swarm.live_tuner --profile data/swarm/SK-2610-001.json
-    python -m swarm.live_tuner                                   # default placeholder rules
+Opened by "Open in Simulator" on a record in Seek's Archives, or from a terminal inside project-seek:
+    python -m swarm.live_tuner --profile data/swarm/SK-2611-001.json
 
-Controls
-    sliders            change a rule; the swarm reacts on the next tick
-    click the arena    HUMAN OVERRIDE: everyone goes to where you clicked
-    Release            hand control back to the swarm rules
-    Scatter            throw robots into random headings (perturbation test)
-    Reset              restart with the slider values (and robot count)
-    Save profile       write the current sliders to <profile>_tuned.json
+Every number comes from the profile (fitted from a Seek record) — there are no sliders.
+    Blue Light / Red Light   arm a light, then click the arena to place it (click again to move it)
+    Release                  turn every light off: the swarm is on its own again
+    Reset                    new robots, no lights
+    Save picture             saves the window as a PNG in Downloads/Seek
 
-Charts: green = robots right now. Dashed = what the cells did in Seek (if the
-profile came from seek_bridge.py). Match the dashed lines and you've reproduced
-the cells' collective behaviour with robots.
+Each light pulls the robots by: instinct (measured by Seek from cells filmed under that light)
++ training (a set value until the learning step exists). The log under the arena shows both.
 """
 import argparse
 import json
@@ -30,225 +26,281 @@ import numpy as np
 import rps.robotarium as robotarium
 from matplotlib.animation import FuncAnimation
 from matplotlib.collections import LineCollection
-from matplotlib.patches import Rectangle
-from matplotlib.widgets import Button, Slider
+from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
 from rps.utilities.barrier_certificates import create_uni_barrier_certificate_with_boundary
 
-from swarm.sim import ARENA, BODY_LENGTH_M, DT, decide, initial_poses, metrics
+from swarm.sim import (ARENA, AT_LIGHT_M, DT, LIGHT_COLORS, at_lights, decide, initial_poses, metrics,
+                       profile_to_params)
 
-INK, MUTED, SWARM, OVR, CELL = "#2C2C2A", "#888780", "#1D9E75", "#D85A30", "#534AB7"
-HISTORY_S = 30
-TRAIL = 25
-
-SLIDERS = [  # key, label, min, max, step
-    ("zone_repulsion_bl", "Repulsion (BL)", 1.1, 6, 0.1),
-    ("zone_orientation_bl", "Orientation (BL)", 0, 15, 0.25),
-    ("zone_attraction_bl", "Attraction (BL)", 0, 25, 0.5),
-    ("speed_bl_per_s", "Speed (BL/s)", 0.2, 1.5, 0.05),
-    ("heading_noise_deg", "Wander (°/tick)", 0, 20, 0.5),
-    ("max_turn_rate_deg_per_s", "Max turn (°/s)", 20, 200, 5),
-    ("blind_angle_deg", "Blind angle (°)", 0, 180, 5),
-    ("num_robots", "Robots (on Reset)", 3, 22, 1),
-]
+INK, MUTED, FAINT, PANEL, EDGE = "#111111", "#8A8A8A", "#CFCFCF", "#F3F3F3", "#DADADA"
+ROBOT, CELLS = "#3A3A3A", "#8A8A8A"
+LIGHT = {"blue": {"fill": "#A7C7FA", "text": "#0B5FFF", "glow": "#2F7BFF", "label": "Blue Light"},
+         "red": {"fill": "#FCA5A5", "text": "#E10600", "glow": "#FF2A1F", "label": "Red Light"}}
+HISTORY_S, TRAIL = 30, 22
 
 
-class Tuner:
+def panel(fig, x, y, w, h, r=0.02):
+    """A rounded grey card in figure coordinates (drawn on the background layer)."""
+    fig.patches.append(FancyBboxPatch((x, y), w, h, boxstyle=f"round,pad=0,rounding_size={r}",
+                                      transform=fig.transFigure, fc=PANEL, ec=EDGE, lw=1, zorder=-10,
+                                      mutation_aspect=fig.get_figwidth() / fig.get_figheight()))
+
+
+class Pill:
+    """A rounded button: its own axes, so a click inside it is easy to detect."""
+
+    def __init__(self, fig, rect, label, fill, color, caption=None, caption_color=None):
+        self.ax = fig.add_axes(rect)
+        w_in, h_in = rect[2] * fig.get_figwidth(), rect[3] * fig.get_figheight()
+        self.ax.set_xlim(0, w_in); self.ax.set_ylim(0, h_in); self.ax.axis("off")
+        self.box = FancyBboxPatch((0.02, 0.02), w_in - 0.04, h_in - 0.04,
+                                  boxstyle=f"round,pad=0,rounding_size={h_in / 2 - 0.02}", fc=fill, ec="none")
+        self.ax.add_patch(self.box)
+        self.text = self.ax.text(w_in / 2, h_in / 2, label, ha="center", va="center", fontsize=13,
+                                 color=color, weight="bold")
+        if caption:
+            fig.text(rect[0] + rect[2] / 2, rect[1] + rect[3] + 0.012, caption, fontsize=9.5, color=caption_color,
+                     ha="center", va="bottom")
+
+    def highlight(self, on):
+        self.box.set_edgecolor(INK if on else "none"); self.box.set_linewidth(2 if on else 0)
+
+
+class Simulator:
     def __init__(self, profile_path):
-        self.profile_path = Path(profile_path)
-        self.raw = json.loads(self.profile_path.read_text())
+        self.path = Path(profile_path)
+        self.raw = json.loads(self.path.read_text())
+        self.p = profile_to_params(self.raw)
         self.targets = self.raw.get("targets") or {}
-        self.n = int(self.raw.get("experiment", {}).get("num_robots", 12))
-        self.rng = np.random.default_rng(self.raw.get("experiment", {}).get("seed", 7))
+        self.code = self.raw.get("record_code") or self.raw.get("source") or self.path.stem
+        self.n = int((self.raw.get("experiment") or {}).get("num_robots", 12))
+        self.rng = np.random.default_rng((self.raw.get("experiment") or {}).get("seed", 7))
         self.safety = create_uni_barrier_certificate_with_boundary(safety_radius=0.12)
-        self._build_ui()
+        self.build()
         self.reset()
 
-    # ── simulation ───────────────────────────────────────────────────────
-    def reset(self, _=None):
-        self.n = int(self.sl["num_robots"].val)
+    # ── simulation ─────────────────────────────────────────────────────────
+    def reset(self):
         self.r = robotarium.Robotarium(number_of_robots=self.n, show_figure=False, sim_in_real_time=False,
-                                       initial_conditions=initial_poses(self.n, self.rng),
-                                       skip_initialization=True)
-        self.t = 0.0
-        self.wander = {}
-        self.hist = {k: deque(maxlen=int(HISTORY_S / DT)) for k in ("t", "pol", "mill", "nnd")}
+                                       initial_conditions=initial_poses(self.n, self.rng), skip_initialization=True)
+        self.t, self.state, self.lights, self.armed = 0.0, {}, {}, None
+        self.placed, self.reached = {}, set()
+        self.at = {c: set() for c in LIGHT_COLORS}           # robot numbers currently at each light
+        self.hist = {k: deque(maxlen=int(HISTORY_S / DT)) for k in ("t", "pol", "nnd", "blue", "red")}
         self.trail = deque(maxlen=TRAIL)
-        self.target = None
-        self.events = []                 # (t, text)
-        self.pre_override_pol = None
-        self.release_t = None
-        self._clear_status()
-        self.wall_start = time.perf_counter()
-        self.sim_at_wall_start = 0.0
-
-    def prof(self):
-        v = {k: s.val for k, s in self.sl.items()}
-        rep = v["zone_repulsion_bl"]
-        ori = max(v["zone_orientation_bl"], rep)          # keep zones ordered: rep ≤ ori ≤ att
-        att = max(v["zone_attraction_bl"], ori)
-        bl = BODY_LENGTH_M
-        return {"r_rep": rep * bl, "r_ori": ori * bl, "r_att": att * bl,
-                "blind": np.deg2rad(v["blind_angle_deg"]), "speed": v["speed_bl_per_s"] * bl,
-                "max_turn": np.deg2rad(v["max_turn_rate_deg_per_s"]),
-                "noise": np.deg2rad(v["heading_noise_deg"])}
+        self.events = []
+        self.wall0, self.sim0 = time.perf_counter(), 0.0
+        for pill in self.pills.values():
+            pill.highlight(False)
 
     def tick(self):
-        p = self.prof()
         x = self.r.get_poses()
         pos, head = x[:2], x[2]
-        dxu = decide(pos, head, p, self.rng, target=self.target, state=self.wander)
+        dxu = decide(pos, head, self.p, self.rng, state=self.state, lights=self.lights)
         self.r.set_velocities(np.arange(self.n), self.safety(dxu, x))
         self.r.step()
         self.t += DT
-        pol, mill, nnd, c = metrics(pos, head)
-        for k, val in zip(("t", "pol", "mill", "nnd"), (self.t, pol, mill, nnd)):
-            self.hist[k].append(val)
+        pol, _, nnd, _ = metrics(pos, head)
+        share = at_lights(pos, self.lights)
+        for k, v in (("t", self.t), ("pol", pol), ("nnd", nnd), ("blue", share.get("blue", np.nan)),
+                     ("red", share.get("red", np.nan))):
+            self.hist[k].append(v)
         self.trail.append(pos.copy())
-        self._track_events(pol, c)
+        self.arrivals(pos)
+        for c, s in share.items():
+            if s >= 0.5 and c not in self.reached:
+                self.reached.add(c)
+                self.log(f"half the swarm reached the {c} light in {self.t - self.placed[c]:.1f} s")
         return pos, head
 
-    def _track_events(self, pol, c):
-        if self.target is not None and not getattr(self, "_reached", True):
-            if np.linalg.norm(c - self.target) < 0.4:
-                self._reached = True
-                self.events.append((self.t, f"reached target in {self.t - self.override_t:.1f} s"))
-        if self.release_t is not None and self.pre_override_pol is not None:
-            if pol >= 0.9 * self.pre_override_pol and self.t - self.release_t > 1.0:
-                self.events.append((self.t, f"swarm re-formed {self.t - self.release_t:.1f} s after release"))
-                self.release_t = None
+    def arrivals(self, pos):
+        """Log each robot that reaches or leaves a light (a little slack on leaving, so the edge doesn't flicker)."""
+        for c in LIGHT_COLORS:
+            if c not in self.lights:
+                self.at[c].clear()
+                continue
+            d = np.linalg.norm(pos - np.asarray(self.lights[c])[:, None], axis=0)
+            for i in range(self.n):
+                rid = i + 1
+                if rid not in self.at[c] and d[i] < AT_LIGHT_M:
+                    self.at[c].add(rid)
+                    self.log(f"robot {rid} reached the {c} light · {len(self.at[c])} at {c}")
+                elif rid in self.at[c] and d[i] > AT_LIGHT_M * 1.4:
+                    self.at[c].discard(rid)
+                    self.log(f"robot {rid} left the {c} light · {len(self.at[c])} at {c}")
 
-    # ── interaction ──────────────────────────────────────────────────────
-    def on_click(self, ev):
-        if ev.inaxes is not self.ax or ev.xdata is None:
-            return
-        if self.target is None:
-            pol = list(self.hist["pol"])[-90:]
-            self.pre_override_pol = float(np.mean(pol)) if pol else None
-            self.override_t = self.t
-            self.events.append((self.t, "human override ON"))
-        self.target = np.array([ev.xdata, ev.ydata])
-        self._reached = False
-        self.release_t = None
+    def log(self, text):
+        """Shown under the arena and printed in the terminal that started Seek."""
+        self.events.append((self.t, text))
+        print(f"[Seek Simulator · {self.code}] {self.t:7.1f} s  {text}", flush=True)
 
-    def release(self, _=None):
-        if self.target is not None:
-            self.target = None
-            self.release_t = self.t
-            self.events.append((self.t, "control released"))
+    # ── interaction ────────────────────────────────────────────────────────
+    def click(self, ev):
+        for name, pill in self.pills.items():
+            if ev.inaxes is pill.ax:
+                return self.press(name)
+        if ev.inaxes is self.ax and self.armed and ev.xdata is not None:
+            c = self.armed
+            xy = (float(np.clip(ev.xdata, *ARENA[:2])), float(np.clip(ev.ydata, *ARENA[2:])))
+            self.log(f"{c} light {'moved' if c in self.lights else 'on'}")
+            self.lights[c], self.placed[c] = xy, self.t
+            self.reached.discard(c)
+            self.armed = None
+            self.pills[c].highlight(False)
 
-    def scatter(self, _=None):
-        # Simulator-only shortcut: spin every robot to a random heading instantly.
-        # (On real robots this would be a "spin in place" command.)
-        self.r._poses[2, :] = self.rng.uniform(-np.pi, np.pi, self.n)
-        self.events.append((self.t, "scattered headings"))
+    def press(self, name):
+        if name in LIGHT_COLORS:
+            self.armed = None if self.armed == name else name
+            for c in LIGHT_COLORS:
+                self.pills[c].highlight(c == self.armed)
+        elif name == "release":
+            if self.lights:
+                self.log("lights off · swarm released")
+            self.lights, self.armed = {}, None
+            for c in LIGHT_COLORS:
+                self.pills[c].highlight(False)
+        elif name == "reset":
+            self.reset()
+        elif name == "save":
+            self.save_picture()
 
-    def save(self, _=None):
-        out = dict(self.raw)
-        for k, s in self.sl.items():
-            if k == "num_robots":
-                out.setdefault("experiment", {})["num_robots"] = int(s.val)
-            else:
-                out[k] = round(float(s.val), 3)
-        out["source"] = f"tuned live from {self.profile_path.name}"
-        path = self.profile_path.with_name(self.profile_path.stem + "_tuned.json")
-        path.write_text(json.dumps(out, indent=2))
-        self.events.append((self.t, f"saved {path.name}"))
+    def save_picture(self):
+        """Save the whole window as a PNG in Downloads/Seek (or data/swarm/pictures if there's no Downloads)."""
+        folder = Path.home() / "Downloads" / "Seek"
+        if not (Path.home() / "Downloads").is_dir():
+            folder = Path("data/swarm/pictures")
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{self.code}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.png"
+        hint = self.hint.get_text()
+        self.hint.set_text("")
+        self.fig.savefig(path, dpi=150, facecolor="white")
+        self.hint.set_text(hint)
+        self.log(f"picture saved: {path}")
 
-    # ── drawing ──────────────────────────────────────────────────────────
-    def _build_ui(self):
-        self.fig = plt.figure(figsize=(14, 8.2))
+    # ── layout ─────────────────────────────────────────────────────────────
+    def build(self):
+        matplotlib.rcParams["toolbar"] = "None"
+        self.fig = fig = plt.figure(figsize=(15, 9.6), facecolor="white")
         try:
-            self.fig.canvas.manager.set_window_title(f"Seek swarm · {self.raw.get('source') or 'live tuner'}")
-        except AttributeError:          # headless backends have no window
+            fig.canvas.manager.set_window_title(f"Seek Simulator · {self.code}")
+        except AttributeError:
             pass
-        self.ax = self.fig.add_axes([0.02, 0.24, 0.56, 0.70])
-        self.ax.set_xlim(ARENA[0] - 0.05, ARENA[1] + 0.05); self.ax.set_ylim(ARENA[2] - 0.05, ARENA[3] + 0.05)
-        self.ax.set_aspect("equal"); self.ax.set_xticks([]); self.ax.set_yticks([])
-        for s in self.ax.spines.values():
-            s.set_visible(False)
-        self.ax.add_patch(Rectangle((ARENA[0], ARENA[2]), 3.2, 2.0, fill=False, ec=MUTED, lw=1))
-        self.trails = LineCollection([], colors=SWARM, linewidths=0.8, alpha=0.35)
-        self.ax.add_collection(self.trails)
-        self.bodies = self.ax.scatter([], [], s=150, c=SWARM, edgecolors=INK, linewidths=0.6, zorder=3)
-        self.noses = LineCollection([], colors=INK, linewidths=1.4, zorder=4)
-        self.ax.add_collection(self.noses)
-        self.star, = self.ax.plot([], [], marker="*", ms=18, color=OVR, zorder=5)
-        self.title = self.fig.text(0.02, 0.955, "", fontsize=12, color=INK)
-        self.status = self.fig.text(0.02, 0.215, "", fontsize=10, color=MUTED, va="top", family="monospace")
+        fig.text(0.035, 0.935, "Seek", fontsize=26, weight="bold", color=INK)
+        fig.text(0.035, 0.895, "Simulator", fontsize=26, weight="bold", color=MUTED)
 
-        self.max = {}
-        specs = [("pol", "Alignment (polarization)", "polarization", (0, 1.05)),
-                 ("mill", "Rotation (milling)", "milling", (0, 1.05)),
-                 ("nnd", "Spacing (nearest neighbour, BL)", "nnd_bl", None)]
+        panel(fig, 0.035, 0.765, 0.60, 0.105)
+        self.pills = {
+            "blue": Pill(fig, [0.055, 0.778, 0.11, 0.045], LIGHT["blue"]["label"], LIGHT["blue"]["fill"],
+                         LIGHT["blue"]["text"], self.p["lights"]["blue"]["role"], "#7FA7E8"),
+            "red": Pill(fig, [0.20, 0.778, 0.11, 0.045], LIGHT["red"]["label"], LIGHT["red"]["fill"],
+                        LIGHT["red"]["text"], self.p["lights"]["red"]["role"], "#EE8A8A"),
+            "release": Pill(fig, [0.345, 0.778, 0.11, 0.045], "Release", "#A3A3A3", "white"),
+            "reset": Pill(fig, [0.49, 0.778, 0.11, 0.045], "Reset", "#A3A3A3", "white"),
+            "save": Pill(fig, [0.49, 0.905, 0.11, 0.04], "Save picture", "#E4E4E4", INK),
+        }
+        self.pills["save"].text.set_fontsize(11.5)
+
+        panel(fig, 0.035, 0.235, 0.60, 0.51)
+        self.ax = ax = fig.add_axes([0.05, 0.25, 0.57, 0.48])
+        ax.set_xlim(ARENA[0] - 0.05, ARENA[1] + 0.05); ax.set_ylim(ARENA[2] - 0.05, ARENA[3] + 0.05)
+        ax.set_aspect("equal"); ax.axis("off")
+        ax.add_patch(Rectangle((ARENA[0], ARENA[2]), 3.2, 2.0, fill=False, ec=FAINT, lw=1))
+        self.glows = {c: [ax.add_patch(Circle((0, 0), r, fc=LIGHT[c]["glow"], ec="none", alpha=0, zorder=1))
+                          for r in (0.42, 0.3, 0.2, 0.11)] for c in LIGHT_COLORS}
+        self.cores = {c: ax.add_patch(Circle((0, 0), 0.045, fc=LIGHT[c]["glow"], ec="white", lw=1.2,
+                                             alpha=0, zorder=2)) for c in LIGHT_COLORS}
+        self.trails = LineCollection([], colors=ROBOT, linewidths=0.8, alpha=0.25, zorder=3)
+        ax.add_collection(self.trails)
+        self.bodies = ax.scatter([], [], s=120, c=ROBOT, edgecolors="white", linewidths=0.8, zorder=4)
+        self.noses = LineCollection([], colors="white", linewidths=1.3, zorder=5)
+        ax.add_collection(self.noses)
+        self.hint = ax.text(0, ARENA[3] - 0.12, "", ha="center", fontsize=11, color=MUTED, zorder=6)
+        self.ids = [ax.text(0, 0, str(i + 1), fontsize=7.5, color=MUTED, zorder=6, ha="left", va="bottom")
+                    for i in range(self.n)]
+
+        self.status = fig.text(0.045, 0.215, "", fontsize=9.5, color=MUTED, va="top", family="monospace",
+                               linespacing=1.45)
+
+        charts = [("Alignment (polarization)", "pol", "polarization"),
+                  ("Spacing (body lengths)", "nnd", "nnd_bl"),
+                  ("Robots at each light", "light", None)]
         self.lines = {}
-        for k, (key, title, tkey, ylim) in enumerate(specs):
-            a = self.fig.add_axes([0.64, 0.80 - k * 0.18, 0.29, 0.11])
-            a.set_title(title, loc="left", fontsize=10, color=INK)
+        for k, (title, key, tkey) in enumerate(charts):
+            y0 = 0.635 - k * 0.285
+            fig.text(0.665, y0 + 0.235, title, fontsize=12, weight="bold", color=MUTED)
+            panel(fig, 0.665, y0, 0.30, 0.22)
+            a = fig.add_axes([0.685, y0 + 0.03, 0.26, 0.17])
             for s in ("top", "right"):
                 a.spines[s].set_visible(False)
-            a.tick_params(labelsize=8, colors=MUTED)
-            if ylim:
-                a.set_ylim(*ylim)
-            self.lines[key] = (a, a.plot([], [], color=SWARM, lw=1.5)[0], ylim)
-            tv = self.targets.get(tkey)
-            if tv is not None:
-                a.axhline(tv, color=CELL, ls="--", lw=1.2)
-                a.text(1.01, tv, f"cells\n{tv:.2f}", color=CELL, fontsize=8, va="center",
-                       transform=a.get_yaxis_transform(), clip_on=False)
+            for s in ("left", "bottom"):
+                a.spines[s].set_color(FAINT)
+            a.set_facecolor(PANEL); a.tick_params(labelsize=8, colors=MUTED)
+            if key == "light":
+                a.set_ylim(0, 1.05)
+                self.lines["blue"] = a.plot([], [], color=LIGHT["blue"]["glow"], lw=1.8)[0]
+                self.lines["red"] = a.plot([], [], color=LIGHT["red"]["glow"], lw=1.8)[0]
+                self.lines["light_ax"] = a
+            else:
+                if key == "pol":
+                    a.set_ylim(0, 1.05)
+                self.lines[key] = a.plot([], [], color=ROBOT, lw=1.6)[0]
+                self.lines[key + "_ax"] = a
+                tv = self.targets.get(tkey)
+                if tv is not None:
+                    a.axhline(tv, color=CELLS, ls="--", lw=1.2)
+                    a.text(1.0, tv, f" cells {tv:.2f}", color=CELLS, fontsize=8, va="bottom", ha="right",
+                           transform=a.get_yaxis_transform())
+        fig.canvas.mpl_connect("button_press_event", self.click)
 
-        self.sl = {}
-        exp = self.raw.get("experiment", {})
-        for k, (key, label, lo, hi, step) in enumerate(SLIDERS):
-            a = self.fig.add_axes([0.75, 0.335 - k * 0.032, 0.20, 0.02])
-            init = exp.get("num_robots", 12) if key == "num_robots" else self.raw.get(key, (lo + hi) / 2)
-            s = Slider(a, label, lo, hi, valinit=float(np.clip(init, lo, hi)), valstep=step, color=SWARM)
-            s.label.set_fontsize(9); s.valtext.set_fontsize(9)
-            self.sl[key] = s
+    def sources(self):
+        """Where each light's pull comes from — the data trail from Seek to this window."""
+        out = []
+        for c in LIGHT_COLORS:
+            L = self.p["lights"][c]
+            inst = (f"instinct {L['instinct']:+.2f} ({L['instinct_source']})" if L["instinct"] is not None
+                    else f"instinct — (no cells filmed under {c} light yet)")
+            out.append(f"{c:<4} light  pull {L['pull']:+.2f} = {inst} + training {L['trained']:+.2f} (set)")
+        return out
 
-        self.btns = []
-        for k, (label, fn) in enumerate([("Release", self.release), ("Scatter", self.scatter),
-                                         ("Reset", self.reset), ("Save profile", self.save)]):
-            b = Button(self.fig.add_axes([0.64 + k * 0.083, 0.035, 0.075, 0.045]), label)
-            b.on_clicked(fn)
-            self.btns.append(b)
-        self.fig.canvas.mpl_connect("button_press_event", self.on_click)
-
-    def _clear_status(self):
-        if hasattr(self, "status"):
-            self.status.set_text("")
-
-    def draw(self, _frame=None, steps=1):
-        for _ in range(steps):
-            pos, head = self.tick()
-        col = OVR if self.target is not None else SWARM
-        self.bodies.set_offsets(pos.T); self.bodies.set_facecolor(col)
+    def draw(self, _frame=None):
+        pos, head = self.tick()
+        self.bodies.set_offsets(pos.T)
+        for i, label in enumerate(self.ids):
+            label.set_position((pos[0, i] + 0.05, pos[1, i] + 0.04))
+            label.set_color(next((LIGHT[c]["text"] for c in LIGHT_COLORS if i + 1 in self.at[c]), MUTED))
         self.noses.set_segments([[(pos[0, i], pos[1, i]),
-                                  (pos[0, i] + 0.09 * np.cos(head[i]), pos[1, i] + 0.09 * np.sin(head[i]))]
+                                  (pos[0, i] + 0.075 * np.cos(head[i]), pos[1, i] + 0.075 * np.sin(head[i]))]
                                  for i in range(self.n)])
-        tr = np.array(self.trail)                       # T x 2 x N
+        tr = np.array(self.trail)
         self.trails.set_segments([tr[:, :, i] for i in range(self.n)] if len(tr) > 1 else [])
-        self.trails.set_color(col)
-        self.star.set_data(([self.target[0]], [self.target[1]]) if self.target is not None else ([], []))
+        for c in LIGHT_COLORS:
+            on = c in self.lights
+            bright = self.p["lights"][c]["brightness"]
+            for k, g in enumerate(self.glows[c]):
+                g.set_alpha((0.07 + 0.05 * k) * bright if on else 0)
+                if on:
+                    g.center = self.lights[c]
+            self.cores[c].set_alpha(1 if on else 0)
+            if on:
+                self.cores[c].center = self.lights[c]
+        self.hint.set_text(f"Click in the arena to place the {self.armed} light" if self.armed else "")
 
         t = np.array(self.hist["t"])
-        for key, (a, line, ylim) in self.lines.items():
-            y = np.array(self.hist[key])
-            line.set_data(t, y)
-            a.set_xlim(max(0, self.t - HISTORY_S), max(HISTORY_S, self.t))
-            if ylim is None and len(y):
-                tv = self.targets.get("nnd_bl") or 0
-                a.set_ylim(0, max(y.max(), tv) * 1.2 + 0.1)
+        lo, hi = max(0, self.t - HISTORY_S), max(HISTORY_S, self.t)
+        for key in ("pol", "nnd", "blue", "red"):
+            self.lines[key].set_data(t, np.array(self.hist[key]))
+        for key in ("pol_ax", "nnd_ax", "light_ax"):
+            self.lines[key].set_xlim(lo, hi)
+        nnd = np.array(self.hist["nnd"])
+        if len(nnd):
+            self.lines["nnd_ax"].set_ylim(0, max(nnd.max(), self.targets.get("nnd_bl") or 0) * 1.25 + 0.1)
 
-        mode = "HUMAN OVERRIDE — click to move target, Release to hand back" if self.target is not None \
-            else "Swarm rules — click the arena to take control"
-        speedup = self.t / max(time.perf_counter() - self.wall_start, 1e-6)
-        self.title.set_text(f"t = {self.t:5.1f} s · {mode}")
-        self.title.set_color(OVR if self.target is not None else INK)
-        src = self.raw.get("source", "")
+        speed = self.t / max(time.perf_counter() - self.wall0, 1e-6)
         ts = (self.raw.get("fit") or {}).get("time_scale")
-        lines = [f"profile: {self.profile_path.name}  ·  {src}",
-                 f"sim speed: {speedup:.2f}× real time" + (f"  ·  1 s robot ≈ {ts:g} s cells" if ts else "")]
-        lines += [f"{et:6.1f} s  {txt}" for et, txt in self.events[-4:]]
+        lines = [f"Profile: {self.code}",
+                 f"Simulator speed: {speed:.2f} x real time" + (f"  (1 s robot ≈ {ts:g} s cells)" if ts else ""),
+                 *self.sources(), ""]
+        lines += [f"{et:6.1f} s  {txt}" for et, txt in self.events[-5:]]
         self.status.set_text("\n".join(lines))
         return ()
 
@@ -258,7 +310,7 @@ class Tuner:
 
 
 def use_window_backend():
-    """The tuner needs an on-screen window. If something (e.g. Streamlit) left matplotlib drawing
+    """The simulator needs an on-screen window. If something (e.g. Streamlit) left matplotlib drawing
     off-screen ('Agg'), switch to this computer's window backend before any figure is made."""
     if matplotlib.get_backend().lower() not in ("agg", "pdf", "svg", "ps", "cairo", "template"):
         return
@@ -272,9 +324,11 @@ def use_window_backend():
                      "On a Mac this should not happen — run it from a normal Terminal session.")
 
 
+Tuner = Simulator          # older name, kept for scripts that import it
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default=str(Path(__file__).parent / "profiles" / "behavior_profile.json"))
     a = ap.parse_args()
     use_window_backend()
-    Tuner(a.profile).run()
+    Simulator(a.profile).run()
