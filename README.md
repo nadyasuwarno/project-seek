@@ -91,3 +91,16 @@ tests/test_archive.py      archive round-trip, visibility, failed-save cleanup
 - Still cells vanish with the median background step (by design: it removes debris).
 - Real test clip: Illinois Data Bank, DOI 10.13012/B2IDB-4912922_V2, CC BY — trim to 10–20 s before upload;
   its fps and µm/px aren't published, so speeds are relative until calibrated.
+
+## Prototype 3 · Seek → Swarm
+
+On any saved record, **Send to swarm** turns the cells' movement into rules for a robot swarm (in body
+lengths), shows them next to the cells' own alignment, rotation and spacing, and **Open live swarm** runs
+them on the Robotarium simulator in a separate window, with sliders and click-to-override.
+
+```bash
+pip install -r requirements-swarm.txt     # once: simulator packages
+streamlit run app.py                      # Repository → a record → Send to swarm
+```
+
+Details, terminal commands and where files are saved: [`swarm/README.md`](swarm/README.md).

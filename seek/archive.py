@@ -252,6 +252,49 @@ class Archive:
                         "(SELECT id FROM recordings WHERE record_code = ?)", (key, code))
             self._audit(con, actor_id, "render_mp4", code, {"bytes": len(mp4)})
 
+    # ── swarm (prototype 3): the robot profile fitted from a record lives with that record ──
+    @staticmethod
+    def swarm_key(code: str) -> str:
+        return f"records/{code}/swarm_profile.json"
+
+    def attach_swarm_profile(self, code: str, actor_id: int, profile: dict) -> str:
+        """Store the behavior profile fitted from this record (swarm.bridge). Re-fitting replaces it."""
+        key = self.swarm_key(code)
+        self.files.put(key, json.dumps(profile, indent=2, default=str).encode())
+        with self._db() as con:
+            self._audit(con, actor_id, "swarm_profile", code,
+                        {"repulsion_bl": profile.get("zone_repulsion_bl"),
+                         "orientation_bl": profile.get("zone_orientation_bl")})
+        return key
+
+    def swarm_profile(self, code: str) -> dict | None:
+        key = self.swarm_key(code)
+        return json.loads(self.files.get(key)) if self.files.exists(key) else None
+
+    def attach_swarm_check(self, code: str, actor_id: int, result: dict, png: bytes) -> None:
+        """Store a fidelity check (swarm.compare): cells vs robots measured the same way."""
+        self.files.put(f"records/{code}/swarm_check.json", json.dumps(result, indent=2, default=str).encode())
+        self.files.put(f"records/{code}/swarm_check.png", png)
+        with self._db() as con:
+            self._audit(con, actor_id, "swarm_check", code, {"summary": result.get("summary")})
+
+    def swarm_check(self, code: str) -> tuple[dict, bytes] | None:
+        j, p = f"records/{code}/swarm_check.json", f"records/{code}/swarm_check.png"
+        if not (self.files.exists(j) and self.files.exists(p)):
+            return None
+        return json.loads(self.files.get(j)), self.files.get(p)
+
+    def swarm_profile_file(self, code: str) -> Path:
+        """Copy the profile to a plain file the simulator can open: data/swarm/<code>.json.
+        The live tuner saves its tuned version next to it (<code>_tuned.json)."""
+        prof = self.swarm_profile(code)
+        if prof is None:
+            raise ValueError(f"No swarm profile for {code} yet — send it to the swarm first.")
+        path = self.dir / "swarm" / f"{code}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prof, indent=2, default=str))
+        return path
+
     def review(self, code: str, reviewer_id: int, decision: str, comment: str = "") -> None:
         """Admin decision: in_review / approved / needs_changes / rejected (admin page arrives in step 2)."""
         if decision not in REVIEW_DECISIONS:
