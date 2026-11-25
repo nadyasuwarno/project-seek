@@ -10,3 +10,5 @@ tifffile
 imageio-ffmpeg   # bundled ffmpeg → browser-playable annotated MP4
 pyarrow          # tracks.parquet in the archive
 pytest
+cvxopt           # Robotarium safety barrier (Seek → Robotarium)
+robotarium-python-simulator @ git+https://github.com/robotarium/robotarium_python_simulator

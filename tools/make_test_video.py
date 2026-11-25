@@ -73,6 +73,57 @@ def make_clip(n_dots=50, n_frames=60, size=512, fps=20.0, um_per_px=0.5, speed_u
     return np.stack(frames), truth, meta
 
 
+
+def simulate_agents(n=30, n_frames=120, fps=20.0, size=512, um_per_px=0.5, speed_um_s=20.0, k_align=0.0,
+                    k_pref=0.0, pref=0.0, sigma=0.3, R_um=40.0, seed=0, substeps=4):
+    """Cells that follow Seek's rule model, with known coefficients (math axes, periodic field).
+
+    turn rate = k_pref·sin(pref−θ) + k_align·sin(φ_neighbors−θ) + σ·noise.  Returns positions in px,
+    image axes (T × n × 2) and headings (T × n). Cells that cross an edge re-enter on the other side,
+    so in the video they leave the field and new tracks start, like real cells."""
+    rng = np.random.default_rng(seed)
+    L = size * um_per_px
+    p = rng.uniform(0, L, (n, 2))
+    th = rng.uniform(-np.pi, np.pi, n)
+    dt = 1 / fps / substeps
+    P, TH = [], []
+    for t in range(n_frames * substeps):
+        if t % substeps == 0:
+            P.append(np.c_[p[:, 0], L - p[:, 1]] / um_per_px)
+            TH.append(th.copy())
+        d = p[None] - p[:, None]
+        d -= L * np.round(d / L)
+        dist = np.hypot(d[..., 0], d[..., 1]) + np.eye(n) * 1e9
+        nb = dist < R_um
+        phi = np.arctan2((nb * np.sin(th)[None]).sum(1), (nb * np.cos(th)[None]).sum(1))
+        turn = k_pref * np.sin(pref - th) + np.where(nb.any(1), k_align * np.sin(phi - th), 0.0)
+        th = th + turn * dt + sigma * np.sqrt(dt) * rng.standard_normal(n)
+        p = (p + speed_um_s * dt * np.c_[np.cos(th), np.sin(th)]) % L
+    return np.array(P), np.array(TH)
+
+
+def make_flock_clip(n_dots=30, n_frames=120, size=512, fps=20.0, um_per_px=0.5, speed_um_s=20.0,
+                    k_align=3.0, k_pref=0.0, pref=0.0, sigma=0.4, R_um=40.0, dot_sigma=1.6, noise=3.0, seed=0):
+    """Video of rule-following cells (e.g. random start → flock). Same outputs as make_clip."""
+    pos, _ = simulate_agents(n_dots, n_frames, fps, size, um_per_px, speed_um_s, k_align, k_pref, pref,
+                             sigma, R_um, seed)
+    rng = np.random.default_rng(seed + 1)
+    yy, xx = np.mgrid[0:size, 0:size]
+    light = 25 + 15 * xx / size
+    frames, rows, r = [], [], int(4 * dot_sigma) + 1
+    for t in range(n_frames):
+        img = light + rng.normal(0, noise, (size, size))
+        for i, (x, y) in enumerate(pos[t]):
+            x0, y0 = int(x), int(y)
+            ys, xs = slice(max(y0 - r, 0), y0 + r + 1), slice(max(x0 - r, 0), x0 + r + 1)
+            img[ys, xs] += 140 * np.exp(-((xx[ys, xs] - x) ** 2 + (yy[ys, xs] - y) ** 2) / (2 * dot_sigma ** 2))
+            rows.append((t, i, x, y))
+        frames.append(np.clip(img, 0, 255).astype(np.uint8))
+    truth = pd.DataFrame(rows, columns=["frame", "dot_id", "x_px", "y_px"])
+    meta = {"fps": fps, "um_per_px": um_per_px, "speed_um_s": speed_um_s, "mode": "flock", "signal": None,
+            "cell_um": 4 * dot_sigma * um_per_px, "k_align": k_align, "k_pref": k_pref, "sigma": sigma}
+    return np.stack(frames), truth, meta
+
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from seek.io import write_mp4

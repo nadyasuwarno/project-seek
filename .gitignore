@@ -14,3 +14,6 @@ data/
 
 # OS
 .DS_Store
+
+# Generated previews and upload scripts
+out/

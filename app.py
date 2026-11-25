@@ -715,6 +715,62 @@ def record_page(arc, me, code):
         record_files(arc, rec, me, s)
     with notes_col:
         record_notes(arc, rec, me)
+    st.markdown("<hr style='margin:1.2rem 0'>", unsafe_allow_html=True)
+    record_robotarium(arc, rec)
+
+
+def record_robotarium(arc, rec):
+    """Embody: the rules this record's cells follow, run by a robot swarm in the Robotarium simulator."""
+    from seek.embody_video import make_package, record_inputs
+    code = rec["record_code"]
+    pre = f"records/{code}/robotarium/"
+    keys = {"mp4": pre + "preview.mp4", "script": pre + f"robotarium_{code}.py", "report": pre + "rules.json"}
+    st.markdown("<div class='lbl'>Robotarium · embody</div>", unsafe_allow_html=True)
+    st.caption("Seek fits the rules these cells move by (pull toward a signal, alignment with neighbours, spacing, "
+               "noise), then runs them on a robot swarm in the Robotarium simulator (Georgia Tech's remote "
+               "robot arena, 3.2 × 2 m, up to 20 robots).")
+    have = arc.files.exists(keys["mp4"])
+    seconds = st.select_slider("Robot experiment length", [30, 45, 60, 90, 120], value=45,
+                               format_func=lambda x: f"{x} s", key="rbt_seconds")
+    if st.button("Re-run on the Robotarium simulator" if have else "Run on the Robotarium simulator",
+                 type="secondary" if have else "primary"):
+        with st.spinner("Fitting rules and running the robots… (about 20–40 s)"):
+            pkg = make_package(name=code, title=f"{code} · {rec['title'] or rec['original_name']}",
+                               seconds=float(seconds), **record_inputs(rec, load_tracks(arc, rec)))
+            arc.files.put(keys["mp4"], pkg["mp4"])
+            arc.files.put(keys["script"], pkg["script"].encode())
+            arc.files.put(keys["report"], pkg["report_json"].encode())
+        st.rerun()
+    if not have:
+        return
+    rep = json.loads(arc.file(keys["report"]))
+    plan, rules, cmp = rep["plan_robots"], rep["rules_cells"], rep["comparison"]
+    st.video(arc.file(keys["mp4"]))
+    a, b = st.columns(2, gap="large")
+    with a:
+        st.markdown("<div class='lbl'>Rules (robot units)</div>", unsafe_allow_html=True)
+        st.markdown(kv([
+            ("pull toward signal", f"{plan['k_pref']:.2f} /s"), ("align with neighbours", f"{plan['k_align']:.2f} /s"),
+            ("separation", f"{plan['k_sep']:.1f} /s within {plan['d_sep']:.2f} m"),
+            ("heading noise", f"{plan['sigma']:.2f} rad/√s"), ("robots · speed", f"{plan['N']} · {plan['v']:.2f} m/s"),
+            ("time", f"1 s of cells = {plan['_scale']['time_dilation']:.1f} s of robots"),
+            ("pull came from", rules["k_pref_source"]),
+        ]), unsafe_allow_html=True)
+        for n in plan["_notes"]:
+            st.caption(f"adjusted for the robots: {n}")
+    with b:
+        st.markdown("<div class='lbl'>Did the robots keep the pattern?</div>", unsafe_allow_html=True)
+        c, r = cmp["cells"], cmp["robots"]
+        f2 = lambda v: "—" if v is None else f"{v:.2f}"   # noqa: E731
+        st.markdown(kv([(k, f"{f2(c[m])}  →  {f2(r[m])}") for k, m in
+                        [("group order", "group_order"), ("local alignment", "local_alignment"),
+                         ("toward signal", "heading_toward_pref"), ("spacing / field", "nn_field")]]),
+                    unsafe_allow_html=True)
+        st.caption(f"cells → robots · simulator check: {rep['simulator']['verdict']}")
+        st.download_button(f"robotarium_{code}.py (upload to the Robotarium)", arc.file(keys["script"]),
+                           f"robotarium_{code}.py", "text/x-python", width="stretch")
+        st.download_button("rules.json", arc.file(keys["report"]), f"{code}_robotarium_rules.json",
+                           "application/json", width="stretch")
 
 
 def record_viewer(arc, rec, s):
